@@ -32,8 +32,8 @@ class BEP_tokenizer_trainer:
                 self.vocab_size = vocab_size
                 self.special_tokens = special_tokens
                 # Init the vocab
-                self.id_to_token = {i: bytes([i]) for i in range(256)}
-                self.token_to_id = {bytes([i]): i for i in range(256)}
+                self.id_to_token = {i: bytes([i]) for i in range(256)} # idx: byte token
+                self.token_to_id = {bytes([i]): i for i in range(256)} # byte token: idx
                 self.idx = 256
                 for special_token in self.special_tokens:
                         b_special_token = special_token.encode("UTF-8")
@@ -43,12 +43,12 @@ class BEP_tokenizer_trainer:
                 if self.idx >= self.vocab_size:
                         raise ValueError(f"The vocab size {vocab_size} is too small to initialize.")
                 # other inits
-                self.tuple_token_counter = Counter() # dict[tuple[bytes], int]
+                self.tuple_token_counter = Counter() # dict[tuple[idx], int]
                 escaped_tokens = [re.escape(special_token) for special_token in self.special_tokens]
                 self.escaped_pattern = "|".join(escaped_tokens)
-                self.merges = [] # list/set of tuple[bytes], e.g. (13, 31)
+                self.merges = [] # tuple[bytes]
                 self.merges_set = set()
-                self.merge_counter = Counter() # bytes: int, bytes = bytes([byte1, byte2]), byte1 and byte 2 are both int
+                self.merge_counter = Counter() # bytes: int, bytes = bytes([byte1, byte2])
         
         def remove_special_tokens(self, input_text):
                 if not self.special_tokens:
@@ -103,7 +103,7 @@ class BEP_tokenizer_trainer:
                         for tuple_token, count in chunk_counter.items():
                                 self.tuple_token_counter[tuple_token] += count
         
-        def init_merge_counter_freq(self, tuple_token):
+        def init_merge_counter_freq(self, tuple_token): # tuple_token is idx
                 if len(tuple_token) <= 1:
                         return 
                 for i in range(len(tuple_token) - 1):
@@ -117,15 +117,22 @@ class BEP_tokenizer_trainer:
                 new_tuple_token = []
                 if len(tuple_token) <= 1:
                         return tuple_token
+                # only needs to check the most recent merge, if the tuple token has the most recent merge, then process
+                # otherwise, skip
+                if not self.merges:
+                        return tuple_token
+                tb_merge_byte1, tb_merge_byte2 = self.merges[-1] # the most recent merge
+                tb_merge_id1 = self.token_to_id[tb_merge_byte1]
+                tb_merge_id2 = self.token_to_id[tb_merge_byte2]
+                if tb_merge_id1 not in tuple_token or tb_merge_id2 not in tuple_token:
+                        return tuple_token
                 i = 0
                 while i < len(tuple_token) - 1:
                         idx1 = tuple_token[i]
                         idx2 = tuple_token[i+1]
                         byte1 = self.id_to_token[idx1]
                         byte2 = self.id_to_token[idx2]
-                        # bs = byte1 + byte2
                         bs_pair = (byte1, byte2)
-                        # bs = bytes([byte1, byte2])
                         if bs_pair in self.merges_set:
                                 bs = bs_pair[0] + bs_pair[1]
                                 new_token_id = self.token_to_id[bs]
@@ -143,17 +150,13 @@ class BEP_tokenizer_trainer:
                 for i in range(len(old_tuple_token) - 1):
                         byte1 = self.id_to_token[old_tuple_token[i]]
                         byte2 = self.id_to_token[old_tuple_token[i + 1]]
-                        # old_bs = byte1 + byte2
                         old_bs_pair = (byte1, byte2)
-                        # old_bs = bytes([byte1, byte2])
                         old_pairs.append(old_bs_pair)
                 new_pairs = []
                 for i in range(len(new_tuple_token) - 1):
                         byte1 = self.id_to_token[new_tuple_token[i]]
                         byte2 = self.id_to_token[new_tuple_token[i + 1]]
-                        # new_bs = byte1 + byte2
                         new_bs_pair = (byte1, byte2)
-                        # new_bs = bytes([byte1, byte2])
                         new_pairs.append(new_bs_pair)
                 for pair in old_pairs:
                         self.merge_counter[pair] -= freq
@@ -169,8 +172,6 @@ class BEP_tokenizer_trainer:
                 new_tuple_token = self.merge_one_tuple_token(tuple_token)
                 if len(new_tuple_token) == len(tuple_token):
                         return
-                # merge happends, update the byte-wise token counter, udpate the sub-word (pre-token) counter
-                # print(f"the old tuple token is {tuple_token} and the new tuple token is {new_tuple_token}")
                 freq = self.tuple_token_counter[tuple_token]
                 self.update_merge_counter_after_merge(tuple_token, new_tuple_token, freq)
                 # self.tuple_token_counter[new_tuple_token] = freq
@@ -197,11 +198,7 @@ class BEP_tokenizer_trainer:
                 # Use max() for O(n) complexity with lexicographic tie-breaking
                 # When frequencies are equal, prefer the lexicographically GREATER pair (per spec)
                 # key returns (frequency, pair) tuple - max compares lexicographically
-                # def sort(item):
-                #         bytes, freq = item
-                #         return (freq, bytes)
                 new_bytes_token_pair = max(self.merge_counter.items(), key=lambda item: (item[1], item[0]))[0]
-                # new_bytes_token_pair = max(self.merge_counter.items(), key=lambda item: (item[1], item[0]))[0]
                 self.merges.append(new_bytes_token_pair)
                 self.merges_set.add(new_bytes_token_pair)
                 del self.merge_counter[new_bytes_token_pair]
@@ -213,10 +210,9 @@ class BEP_tokenizer_trainer:
         
         def train(self, input_file_path, use_multiprocessing=True, num_processes=None, check_profile = False):
                 """Train the BPE tokenizer."""
+                # file reading
                 if check_profile:
                         profiler = cProfile.Profile()
-                        
-                        # file reading
                         profiler.enable()
                 try:
                         with open(input_file_path, 'r', encoding='utf-8') as f:
@@ -264,18 +260,6 @@ class BEP_tokenizer_trainer:
                         self._print_profile_stats(profiler, f"BPE Training ({step_count} steps)")
                 
                         print(f"We get total {self.idx} number of vacobs. And the merge set is {self.merges}.")
-                
-                # # Convert merges from (bytes, bytes) tuples to list for return
-                # # The internal representation uses (bytes, bytes) pairs
-                # merges_as_tuples = []
-                # for m in self.merges:
-                #         if isinstance(m, tuple) and len(m) == 2:
-                #                 # m is already (bytes, bytes)
-                                
-                #                 merges_as_tuples.append(bytes(list(m)))
-                #         else:
-                #                 # Fallback for unexpected format
-                #                 merges_as_tuples.append(m)
                 
                 return self.merges, self.id_to_token
         
@@ -330,7 +314,6 @@ class BEP_tokenizer_trainer:
                                 else:
                                         merges_readable.append(f"{item1}+{item2}")
                         elif isinstance(m, bytes):
-                                # Old format: already concatenated bytes
                                 merges_readable.append(m.decode('utf-8', errors='replace'))
                         else:
                                 merges_readable.append(str(m))
