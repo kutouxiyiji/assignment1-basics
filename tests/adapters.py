@@ -8,6 +8,7 @@ import numpy.typing as npt
 import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
+from cs336_basics.tokenizer import BEP_tokenizer_trainer
 
 
 def run_linear(
@@ -300,7 +301,7 @@ def run_transformer_lm(
         num_heads (int): Number of heads to use in multi-headed attention. `d_model` must be
             evenly divisible by `num_heads`.
         d_ff (int): Dimensionality of the feed-forward inner layer (section 3.3).
-        rope_theta (float): The RoPE $\Theta$ parameter.
+        rope_theta (float): The RoPE $\\Theta$ parameter.
         weights (dict[str, Tensor]):
             State dict of our reference implementation. {num_layers} refers to an
             integer between `0` and `num_layers - 1` (the layer index).
@@ -559,7 +560,20 @@ def get_tokenizer(
     Returns:
         A BPE tokenizer that uses the provided vocab, merges, and special tokens.
     """
-    raise NotImplementedError
+    # Create tokenizer with appropriate vocab size
+    vocab_size = len(vocab) if vocab else 10000
+    tokenizer = BEP_tokenizer_trainer(vocab_size, special_tokens if special_tokens else [])
+    
+    # Set the vocab
+    tokenizer.id_to_token = vocab
+    tokenizer.token_to_id = {v: k for k, v in vocab.items()}
+    tokenizer.idx = len(vocab)
+    
+    # Set the merges in both list and set format
+    tokenizer.merges = list(merges)
+    tokenizer.merges_set = set(merges)
+    
+    return tokenizer
 
 
 def run_train_bpe(
@@ -589,4 +603,6 @@ def run_train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    raise NotImplementedError
+    tokenizer = BEP_tokenizer_trainer(vocab_size, special_tokens)
+    merges, vocab = tokenizer.train(input_path, use_multiprocessing=False)
+    return vocab, merges
