@@ -17,7 +17,7 @@ from jaxtyping import Bool, Float, Int  # pyright: ignore[reportMissingImports]
 from torch import Tensor
 from cs336_basics.tokenizer import BEP_tokenizer_trainer
 from cs336_basics.tokenizer_endecoder import TokenizerEnDeCoder
-from cs336_basics.transformer_utils import MyLiner, MyEmbedding, MyRMSNorm
+from cs336_basics.transformer_utils import MyLiner, MyEmbedding, MyRMSNorm, MySwiGLU
 
 
 def run_linear(
@@ -96,7 +96,12 @@ def run_swiglu(
     # swiglu.w1.weight.data = w1_weight
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
-    raise NotImplementedError
+    swiglu = MySwiGLU(d_model, d_ff)
+    # Transpose weights from (d_ff, d_model) to (d_model, d_ff) for MyLiner
+    swiglu.linear1.weights.data = w1_weight.T
+    swiglu.linear2.weights.data = w2_weight.T
+    swiglu.linear3.weights.data = w3_weight.T
+    return swiglu.forward(in_features)
 
 
 def run_scaled_dot_product_attention(

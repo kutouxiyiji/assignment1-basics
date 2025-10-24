@@ -26,7 +26,7 @@ class MyLiner(torch.nn.Module):
                 self.weights = torch.nn.Parameter(w)
         
         def forward(self, x: torch.Tensor) -> torch.Tensor:
-                return einsum(x, self.weights, '... in, in out -> ... out')
+                return einsum(x, self.weights, '... i, i o -> ... o')
 
 class MyEmbedding(torch.nn.Module):
 
@@ -59,3 +59,25 @@ class MyRMSNorm(torch.nn.Module):
                 rms = torch.sqrt(torch.mean(x**2, dim = -1, keepdim=True) + self.eps)
                 normed_x = x / rms
                 return einsum(normed_x, self.gains, "... dmodel, dmodel -> ... dmodel")
+
+class MySwiGLU(torch.nn.Module):
+
+        def __init__(self, d_model: int, d_ff: int = None, device: torch.device = None, dtype: torch.dtype = None, *args, **kwargs) -> None:
+                super().__init__(*args, **kwargs)
+                if not d_ff:
+                        target_d_ff = (8 * d_model) // 3
+                        d_ff = ((target_d_ff + 32) // 64) * 64
+                        if d_ff == 0:
+                                d_ff = 4 * d_model
+                # FFN(x) = SwiGLU(x, W1, W2, W3) = W2(SiLU(W1x) ⊙ W3x)
+                self.linear1 = MyLiner(d_model, d_ff, device, dtype)
+                self.linear3 = MyLiner(d_model, d_ff, device, dtype)
+                self.linear2 = MyLiner(d_ff, d_model, device, dtype)
+        
+        def forward(self, x):
+                output1 = self.linear1.forward(x)
+                silu = output1 * torch.sigmoid(output1)
+                output3 = self.linear3.forward(x)
+                element_wise_output = silu * output3
+                output = self.linear2.forward(element_wise_output)
+                return output
