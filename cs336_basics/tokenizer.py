@@ -21,6 +21,32 @@ import os
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
 
+def gpt2_bytes_to_unicode():
+    """
+    Returns a mapping between every possible byte (an integer from 0 to 255) to a
+    printable unicode string character representation. This ensures each byte has
+    a unique, printable representation for JSON serialization.
+    
+    This function is taken from the GPT-2 code.
+    """
+    # These 188 integers can used as-is, since they are not whitespace or control characters.
+    bs = list(range(ord("!"), ord("~") + 1)) + list(range(ord("¡"), ord("¬") + 1)) + list(range(ord("®"), ord("ÿ") + 1))
+    cs = bs[:]
+    # now get the representations of the other 68 integers that do need shifting
+    # each will get mapped chr(256 + n), where n will grow from 0...67 in the loop
+    n = 0
+    for b in range(2**8):
+        if b not in bs:
+            # If this integer isn't in our list of visually-representable
+            # charcters, then map it to the next nice character (offset by 256)
+            bs.append(b)
+            cs.append(2**8 + n)
+            n += 1
+    characters = [chr(n) for n in cs]
+    d = dict(zip(bs, characters))
+    return d
+
+
 
 class BEP_tokenizer_trainer:
 
@@ -124,6 +150,7 @@ class BEP_tokenizer_trainer:
                 tb_merge_byte1, tb_merge_byte2 = self.merges[-1] # the most recent merge
                 tb_merge_id1 = self.token_to_id[tb_merge_byte1]
                 tb_merge_id2 = self.token_to_id[tb_merge_byte2]
+                # if the tuple token ids don't have the most recent merge ids, then we can skip (this will save a lot of time).
                 if tb_merge_id1 not in tuple_token or tb_merge_id2 not in tuple_token:
                         return tuple_token
                 i = 0
@@ -326,6 +353,64 @@ class BEP_tokenizer_trainer:
                 print(f"  - merges.pkl ({len(self.merges)} merges)")
                 print(f"  - vocab_readable.json (for inspection)")
                 print(f"  - merges_readable.json (for inspection)")
+        
+        def save_json_txt(self, output_dir):
+                """
+                Save tokenizer in JSON (vocab) and TXT (merges) format.
+                This format is compatible with TokenizerEnDeCoder.from_files().
+                Uses GPT-2's bytes-to-unicode mapping to ensure each byte has a unique representation.
+                
+                Args:
+                        output_dir: Directory to save the files to
+                
+                Output files:
+                        - vocab.json: {str_token: int_id} mapping
+                        - merges.txt: One merge per line in "token1 token2" format
+                """
+                output_path = Path(output_dir)
+                output_path.mkdir(parents=True, exist_ok=True)
+                
+                # Get GPT-2 byte to unicode mapping
+                byte_encoder = gpt2_bytes_to_unicode()
+                
+                # Helper function to convert bytes to GPT-2 string representation
+                def bytes_to_str(token_bytes):
+                        """Convert bytes to string using GPT-2 encoding"""
+                        if isinstance(token_bytes, bytes):
+                                return ''.join(byte_encoder[b] for b in token_bytes)
+                        return str(token_bytes)
+                
+                # Save vocab as JSON: {str_token: int_id}
+                vocab_json = {}
+                for token_id, token_bytes in self.id_to_token.items():
+                        token_str = bytes_to_str(token_bytes)
+                        vocab_json[token_str] = token_id
+                
+                with open(output_path / 'vocab.json', 'w', encoding='utf-8') as f:
+                        json.dump(vocab_json, f, ensure_ascii=False, indent=2)
+                
+                # Save merges as TXT: "token1 token2" per line
+                with open(output_path / 'merges.txt', 'w', encoding='utf-8') as f:
+                        for merge in self.merges:
+                                if isinstance(merge, tuple) and len(merge) == 2:
+                                        token1, token2 = merge
+                                        token1_str = bytes_to_str(token1)
+                                        token2_str = bytes_to_str(token2)
+                                        # Write as "token1 token2"
+                                        f.write(f"{token1_str} {token2_str}\n")
+                                elif isinstance(merge, bytes):
+                                        # Old format: single bytes object
+                                        merge_str = bytes_to_str(merge)
+                                        f.write(f"{merge_str}\n")
+                                else:
+                                        # Unexpected format, write as-is
+                                        f.write(f"{merge}\n")
+                
+                print(f"\n[OK] Tokenizer saved to {output_path} (JSON/TXT format)")
+                print(f"  - vocab.json ({len(self.id_to_token)} tokens)")
+                print(f"  - merges.txt ({len(self.merges)} merges)")
+                print(f"  Format: GPT-2 bytes-to-unicode encoding")
+                print(f"  Compatible with TokenizerEnDeCoder.from_files()")
         
         @classmethod
         def from_files(cls, vocab_path, merges_path, special_tokens=None):
@@ -581,9 +666,9 @@ if __name__ == '__main__':
                 print("TRAINING NEW TOKENIZER")
                 print("="*60)
                 
-                vocab_size = int(sys.argv[1]) if len(sys.argv) > 1 else 1000
+                vocab_size = int(sys.argv[1]) if len(sys.argv) > 1 else 10000
                 data_file = sys.argv[2] if len(sys.argv) > 2 else './data/TinyStoriesV2-GPT4-valid.txt'
-                output_dir = sys.argv[3] if len(sys.argv) > 3 else './tokenizer_output/test'
+                output_dir = sys.argv[3] if len(sys.argv) > 3 else './tokenizer_output/valid_1000vocab'
                 
                 print(f"Config:")
                 print(f"  - Vocab size: {vocab_size}")
@@ -605,7 +690,7 @@ if __name__ == '__main__':
                 print(f" Sampled merges are {tokenizer.merges[:10]} and {tokenizer.merges[-10:]}\n")
                 print(f" returned merges are {merges[:10]} and {merges[-10:]}")
                 # Save the tokenizer
-                tokenizer.save(output_dir)
+                tokenizer.save_json_txt(output_dir)
                 
                 if False:
                         # Demonstrate loading

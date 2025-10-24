@@ -31,9 +31,9 @@ def find_chunk_boundaries(
         initial_position = chunk_boundaries[bi]
         file.seek(initial_position)  # Start at boundary guess
         while True:
-            mini_chunk = file.read(mini_chunk_size)  # Read a mini chunk
+            mini_chunk = file.read(mini_chunk_size)  # Read a mini chunk, may read more or less than 4k bytes.
 
-            # If EOF, this boundary should be at the end of the file
+            # If EOF, this boundary should be at the end of the file. The last read will read empty mini_chunk and it equals to b"".
             if mini_chunk == b"":
                 chunk_boundaries[bi] = file_size
                 break
