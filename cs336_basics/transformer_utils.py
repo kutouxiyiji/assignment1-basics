@@ -1,0 +1,29 @@
+# The util classes for the transformer
+#       - in-house Linear
+#       - in-house Embedding
+
+# from signal import SIGALRM
+import torch
+from einops import rearrange, einsum  # pyright: ignore[reportMissingImports], using uv
+
+
+class MyLiner(torch.nn.Module):
+        def __init_subclass__(cls) -> None:
+                return super().__init_subclass__()
+        
+        def __init__(self, in_features: int, out_features: int, device: torch.device =None, dtype: torch.dtype=None, *args, **kwargs) -> None:
+                super().__init__(*args, **kwargs)
+                self.in_features = in_features
+                self.out_features = out_features
+                self.device = device
+                self.dtype = dtype
+                
+                # Initialize weights with proper shape (in_features, out_features)
+                w = torch.empty(in_features, out_features, device=device, dtype=dtype)
+                sigma = torch.sqrt(torch.tensor(2/(in_features + out_features)))
+                torch.nn.init.trunc_normal_(w, a=-3*sigma, b=3*sigma) # _ indicating self operation, w is modified.
+                # Register as nn.Parameter
+                self.weights = torch.nn.Parameter(w)
+        
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+                return einsum(x, self.weights, '... in, in out -> ... out')

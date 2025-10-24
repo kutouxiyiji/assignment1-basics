@@ -1,20 +1,29 @@
 from __future__ import annotations
 
+# pyright: reportGeneralTypeIssues=false
+# pyright: reportOptionalMemberAccess=false
+# pyright: reportInvalidTypeVarUse=false
+# pyright: reportUnknownArgumentType=false
+# pyright: reportUnknownMemberType=false
+# pyright: reportUnknownVariableType=false
+
 import os
 from collections.abc import Iterable
 from typing import IO, Any, BinaryIO
 
 import numpy.typing as npt
 import torch
-from jaxtyping import Bool, Float, Int
+from jaxtyping import Bool, Float, Int  # pyright: ignore[reportMissingImports]
 from torch import Tensor
 from cs336_basics.tokenizer import BEP_tokenizer_trainer
+from cs336_basics.tokenizer_endecoder import TokenizerEnDeCoder
+from cs336_basics.transformer_utils import MyLiner
 
 
 def run_linear(
     d_in: int,
     d_out: int,
-    weights: Float[Tensor, " d_out d_in"],
+    weights: Float[Tensor, " d_out d_in"],  # pyright: ignore[reportUndefinedVariable]
     in_features: Float[Tensor, " ... d_in"],
 ) -> Float[Tensor, " ... d_out"]:
     """
@@ -29,8 +38,10 @@ def run_linear(
     Returns:
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
-
-    raise NotImplementedError
+    my_liner = MyLiner(d_in, d_out)
+    # Transpose weights from [d_out, d_in] to [d_in, d_out] for MyLiner
+    my_liner.load_state_dict({'weights': weights.T})
+    return my_liner.forward(in_features)
 
 
 def run_embedding(
@@ -560,20 +571,8 @@ def get_tokenizer(
     Returns:
         A BPE tokenizer that uses the provided vocab, merges, and special tokens.
     """
-    # Create tokenizer with appropriate vocab size
-    vocab_size = len(vocab) if vocab else 10000
-    tokenizer = BEP_tokenizer_trainer(vocab_size, special_tokens if special_tokens else [])
-    
-    # Set the vocab
-    tokenizer.id_to_token = vocab
-    tokenizer.token_to_id = {v: k for k, v in vocab.items()}
-    tokenizer.idx = len(vocab)
-    
-    # Set the merges in both list and set format
-    tokenizer.merges = list(merges)
-    tokenizer.merges_set = set(merges)
-    
-    return tokenizer
+    # Use TokenizerEnDeCoder which has the encode/decode methods
+    return TokenizerEnDeCoder(vocab, merges, special_tokens)
 
 
 def run_train_bpe(
