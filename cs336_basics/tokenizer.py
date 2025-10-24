@@ -348,7 +348,7 @@ class BEP_tokenizer_trainer:
                 with open(output_path / 'merges_readable.json', 'w', encoding='utf-8') as f:
                         json.dump(merges_readable, f, indent=2, ensure_ascii=False)
                 
-                print(f"\n✓ Tokenizer saved to {output_path}")
+                print(f"\n[OK] Tokenizer saved to {output_path}")
                 print(f"  - vocab.pkl ({len(self.id_to_token)} tokens)")
                 print(f"  - merges.pkl ({len(self.merges)} merges)")
                 print(f"  - vocab_readable.json (for inspection)")
@@ -542,7 +542,7 @@ class BEP_tokenizer_trainer:
                 else:
                         tokenizer.escaped_pattern = ""
                 
-                print(f"\n✓ Tokenizer created from pretrained data")
+                print(f"\n[OK] Tokenizer created from pretrained data")
                 print(f"  - {len(tokenizer.id_to_token)} tokens")
                 print(f"  - {len(tokenizer.merges)} merges")
                 print(f"  - {len(tokenizer.special_tokens)} special tokens")
@@ -667,8 +667,8 @@ if __name__ == '__main__':
                 print("="*60)
                 
                 vocab_size = int(sys.argv[1]) if len(sys.argv) > 1 else 10000
-                data_file = sys.argv[2] if len(sys.argv) > 2 else './data/TinyStoriesV2-GPT4-valid.txt'
-                output_dir = sys.argv[3] if len(sys.argv) > 3 else './tokenizer_output/valid_1000vocab'
+                data_file = sys.argv[2] if len(sys.argv) > 2 else './data/TinyStoriesV2-GPT4-train.txt'
+                output_dir = sys.argv[3] if len(sys.argv) > 3 else './tokenizer_output/tinystory_train_10000vocab'
                 
                 print(f"Config:")
                 print(f"  - Vocab size: {vocab_size}")
@@ -677,7 +677,7 @@ if __name__ == '__main__':
                 print()
                 
                 tokenizer = BEP_tokenizer_trainer(vocab_size, ['<|endoftext|>'])
-                merges, vocab = tokenizer.train(data_file, use_multiprocessing=True, num_processes=None, check_profile = True)
+                merges, vocab = tokenizer.train(data_file, use_multiprocessing=True, num_processes=None, check_profile = False)
                 
                 print(f"\nTraining complete:")
                 print(f"  - Vocab size: {tokenizer.vocab_size}")
@@ -704,6 +704,6 @@ if __name__ == '__main__':
                         assert loaded_tokenizer.idx == tokenizer.idx
                         assert len(loaded_tokenizer.merges) == len(tokenizer.merges)
                         assert loaded_tokenizer.id_to_token == tokenizer.id_to_token
-                        print("\n✓ Verification passed: Loaded tokenizer matches original!")
+                        print("\n[OK] Verification passed: Loaded tokenizer matches original!")
 
 

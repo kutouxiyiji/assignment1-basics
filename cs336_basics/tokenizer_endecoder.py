@@ -256,8 +256,25 @@ class TokenizerEnDeCoder():
                 return joint_bytes.decode('utf-8', errors='replace')
 
 
-# endecoder = TokenizerEnDeCoder.from_files('./tests/fixtures/gpt2_vocab.json', './tests/fixtures/gpt2_merges.txt', ['<|endoftext|>'])
-# print()
+# endecoder = TokenizerEnDeCoder.from_files('./tokenizer_output/tinystory_train_10000vocab/vocab.json', './tokenizer_output/tinystory_train_10000vocab/merges.txt', ['<|endoftext|>'])
+# print("loaded the tokenizer!")
+# with open('./data/TinyStoriesV2-GPT4-valid.txt', 'r', encoding='utf-8') as f:
+#         input_text = f.read()
+# print("loaded the text")
+# #sample
+# input_text = input_text[:10000]
+# print("start encoding...")
+# encoded_tokens = endecoder.encode_iterable(input_text)
+# original_len_bytes = len(input_text.encode("UTF-8"))
+# encoded_len = len(list(encoded_tokens))
+# print(f"the encoded length is {encoded_len}, and the orginal length is {original_len_bytes}, the compression ratio is {original_len_bytes/encoded_len}")
+
+
+# # Results
+# the encoded length is 2479, and the orginal length is 10000, the compression ratio is 4.033884630899556
+
+
+
 # # print("test the encoder. \nLet's play dota2.^86774$%345354%^&&")
 # print(endecoder.encode("s"))
 # print(endecoder.decode([82]))

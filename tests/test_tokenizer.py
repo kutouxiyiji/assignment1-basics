@@ -2,8 +2,14 @@ from __future__ import annotations
 
 import json
 import os
-import resource
 import sys
+
+try:
+    import resource
+    HAS_RESOURCE = True
+except ImportError:
+    # resource module is not available on Windows
+    HAS_RESOURCE = False
 
 import psutil
 import pytest
@@ -19,6 +25,11 @@ MERGES_PATH = FIXTURES_PATH / "gpt2_merges.txt"
 def memory_limit(max_mem):
     def decorator(f):
         def wrapper(*args, **kwargs):
+            if not HAS_RESOURCE:
+                # On Windows, resource module is not available, so just run the function
+                # without memory limits
+                return f(*args, **kwargs)
+            
             process = psutil.Process(os.getpid())
             prev_limits = resource.getrlimit(resource.RLIMIT_AS)
             resource.setrlimit(resource.RLIMIT_AS, (process.memory_info().rss + max_mem, -1))
@@ -42,10 +53,10 @@ def get_tokenizer_from_vocab_merges_path(
     special_tokens: list[str] | None = None,
 ):
     gpt2_byte_decoder = {v: k for k, v in gpt2_bytes_to_unicode().items()}
-    with open(vocab_path) as vocab_f:
+    with open(vocab_path, encoding='utf-8') as vocab_f:
         gpt2_vocab = json.load(vocab_f)
     gpt2_bpe_merges = []
-    with open(merges_path) as f:
+    with open(merges_path, encoding='utf-8') as f:
         for line in f:
             cleaned_line = line.rstrip()
             if cleaned_line and len(cleaned_line.split(" ")) == 2:
@@ -267,7 +278,7 @@ def test_address_roundtrip():
         vocab_path=VOCAB_PATH,
         merges_path=MERGES_PATH,
     )
-    with open(FIXTURES_PATH / "address.txt") as f:
+    with open(FIXTURES_PATH / "address.txt", encoding='utf-8') as f:
         corpus_contents = f.read()
 
     ids = tokenizer.encode(corpus_contents)
@@ -281,7 +292,7 @@ def test_address_matches_tiktoken():
         merges_path=MERGES_PATH,
     )
     corpus_path = FIXTURES_PATH / "address.txt"
-    with open(corpus_path) as f:
+    with open(corpus_path, encoding='utf-8') as f:
         corpus_contents = f.read()
     reference_ids = reference_tokenizer.encode(corpus_contents)
     ids = tokenizer.encode(corpus_contents)
@@ -296,7 +307,7 @@ def test_german_roundtrip():
         vocab_path=VOCAB_PATH,
         merges_path=MERGES_PATH,
     )
-    with open(FIXTURES_PATH / "german.txt") as f:
+    with open(FIXTURES_PATH / "german.txt", encoding='utf-8') as f:
         corpus_contents = f.read()
 
     ids = tokenizer.encode(corpus_contents)
@@ -310,7 +321,7 @@ def test_german_matches_tiktoken():
         merges_path=MERGES_PATH,
     )
     corpus_path = FIXTURES_PATH / "german.txt"
-    with open(corpus_path) as f:
+    with open(corpus_path, encoding='utf-8') as f:
         corpus_contents = f.read()
     reference_ids = reference_tokenizer.encode(corpus_contents)
     ids = tokenizer.encode(corpus_contents)
@@ -325,7 +336,7 @@ def test_tinystories_sample_roundtrip():
         vocab_path=VOCAB_PATH,
         merges_path=MERGES_PATH,
     )
-    with open(FIXTURES_PATH / "tinystories_sample.txt") as f:
+    with open(FIXTURES_PATH / "tinystories_sample.txt", encoding='utf-8') as f:
         corpus_contents = f.read()
 
     ids = tokenizer.encode(corpus_contents)
@@ -338,7 +349,7 @@ def test_tinystories_matches_tiktoken():
         vocab_path=VOCAB_PATH, merges_path=MERGES_PATH, special_tokens=["<|endoftext|>"]
     )
     corpus_path = FIXTURES_PATH / "tinystories_sample.txt"
-    with open(corpus_path) as f:
+    with open(corpus_path, encoding='utf-8') as f:
         corpus_contents = f.read()
     reference_ids = reference_tokenizer.encode(corpus_contents, allowed_special={"<|endoftext|>"})
     ids = tokenizer.encode(corpus_contents)
@@ -354,7 +365,7 @@ def test_encode_special_token_trailing_newlines():
         vocab_path=VOCAB_PATH, merges_path=MERGES_PATH, special_tokens=["<|endoftext|>"]
     )
     corpus_path = FIXTURES_PATH / "special_token_trailing_newlines.txt"
-    with open(corpus_path) as f:
+    with open(corpus_path, encoding='utf-8') as f:
         corpus_contents = f.read()
     reference_ids = reference_tokenizer.encode(corpus_contents, allowed_special={"<|endoftext|>"})
     ids = tokenizer.encode(corpus_contents)
@@ -370,7 +381,7 @@ def test_encode_special_token_double_newline_non_whitespace():
         vocab_path=VOCAB_PATH, merges_path=MERGES_PATH, special_tokens=["<|endoftext|>"]
     )
     corpus_path = FIXTURES_PATH / "special_token_double_newlines_non_whitespace.txt"
-    with open(corpus_path) as f:
+    with open(corpus_path, encoding='utf-8') as f:
         corpus_contents = f.read()
     reference_ids = reference_tokenizer.encode(corpus_contents, allowed_special={"<|endoftext|>"})
     ids = tokenizer.encode(corpus_contents)
@@ -386,10 +397,10 @@ def test_encode_iterable_tinystories_sample_roundtrip():
         merges_path=MERGES_PATH,
     )
     all_ids = []
-    with open(FIXTURES_PATH / "tinystories_sample.txt") as f:
+    with open(FIXTURES_PATH / "tinystories_sample.txt", encoding='utf-8') as f:
         for _id in tokenizer.encode_iterable(f):
             all_ids.append(_id)
-    with open(FIXTURES_PATH / "tinystories_sample.txt") as f:
+    with open(FIXTURES_PATH / "tinystories_sample.txt", encoding='utf-8') as f:
         corpus_contents = f.read()
     assert tokenizer.decode(all_ids) == corpus_contents
 
@@ -400,11 +411,11 @@ def test_encode_iterable_tinystories_matches_tiktoken():
         vocab_path=VOCAB_PATH, merges_path=MERGES_PATH, special_tokens=["<|endoftext|>"]
     )
     corpus_path = FIXTURES_PATH / "tinystories_sample.txt"
-    with open(corpus_path) as f:
+    with open(corpus_path, encoding='utf-8') as f:
         corpus_contents = f.read()
     reference_ids = reference_tokenizer.encode(corpus_contents, allowed_special={"<|endoftext|>"})
     all_ids = []
-    with open(FIXTURES_PATH / "tinystories_sample.txt") as f:
+    with open(FIXTURES_PATH / "tinystories_sample.txt", encoding='utf-8') as f:
         for _id in tokenizer.encode_iterable(f):
             all_ids.append(_id)
     assert all_ids == reference_ids
@@ -422,7 +433,7 @@ def test_encode_iterable_memory_usage():
         vocab_path=VOCAB_PATH,
         merges_path=MERGES_PATH,
     )
-    with open(FIXTURES_PATH / "tinystories_sample_5M.txt") as f:
+    with open(FIXTURES_PATH / "tinystories_sample_5M.txt", encoding='utf-8') as f:
         ids = []
         for _id in _encode_iterable(tokenizer, f):
             ids.append(_id)
@@ -441,7 +452,7 @@ def test_encode_memory_usage():
         vocab_path=VOCAB_PATH,
         merges_path=MERGES_PATH,
     )
-    with open(FIXTURES_PATH / "tinystories_sample_5M.txt") as f:
+    with open(FIXTURES_PATH / "tinystories_sample_5M.txt", encoding='utf-8') as f:
         contents = f.read()
         _ = _encode(tokenizer, contents)
 
