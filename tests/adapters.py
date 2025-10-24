@@ -17,7 +17,7 @@ from jaxtyping import Bool, Float, Int  # pyright: ignore[reportMissingImports]
 from torch import Tensor
 from cs336_basics.tokenizer import BEP_tokenizer_trainer
 from cs336_basics.tokenizer_endecoder import TokenizerEnDeCoder
-from cs336_basics.transformer_utils import MyLiner
+from cs336_basics.transformer_utils import MyLiner, MyEmbedding
 
 
 def run_linear(
@@ -62,8 +62,9 @@ def run_embedding(
     Returns:
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
-
-    raise NotImplementedError
+    token_embedding = MyEmbedding(vocab_size, d_model)
+    token_embedding.load_state_dict({'embeddings': weights})
+    return token_embedding.forward(token_ids)
 
 
 def run_swiglu(

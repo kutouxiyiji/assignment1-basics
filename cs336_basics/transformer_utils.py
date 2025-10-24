@@ -27,3 +27,20 @@ class MyLiner(torch.nn.Module):
         
         def forward(self, x: torch.Tensor) -> torch.Tensor:
                 return einsum(x, self.weights, '... in, in out -> ... out')
+
+class MyEmbedding(torch.nn.Module):
+
+        def __init_subclass__(cls) -> None:
+                return super().__init_subclass__()
+        
+        def __init__(self, num_embeddings: int, embedding_dim: int, device: torch.device =None, dtype: torch.dtype =None, *args, **kwargs) -> None:
+                super().__init__(*args, **kwargs)
+                self.num_embeddings = num_embeddings
+                self.embedding_dim = embedding_dim
+
+                embeddings = torch.empty(num_embeddings, embedding_dim, dtype = dtype, device = device)
+                torch.nn.init.trunc_normal_(embeddings, a = -3, b = 3)
+                self.embeddings = torch.nn.Parameter(embeddings)
+        
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+                return self.embeddings[x]
