@@ -81,3 +81,51 @@ class MySwiGLU(torch.nn.Module):
                 element_wise_output = silu * output3
                 output = self.linear2.forward(element_wise_output)
                 return output
+
+
+class RotaryPositionalEmbedding(torch.nn.Module):
+        def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None, *args, **kwargs) -> None:
+                super().__init__(*args, **kwargs)
+                self.theta = theta
+                self.d_k = d_k
+                self.max_seq_len = max_seq_len
+                self.device = device
+
+                # Theta_i,k = i/Theta^(2*k / d_k), w/ k belongs [0, d_k/2]
+                # theta_i,k should be in shape of (max_seq_len, d_k/2)
+                if d_k % 2 != 0:
+                        raise ValueError("d_k must be even number.")
+                # theta_k is shape (d_k//2, )
+                theta_k = self.theta ** (-(torch.arange(0, self.d_k, 2, dtype = torch.float32, device = self.device)/self.d_k))
+                # seq_pos is shape (max_seq_len, )
+                seq_pos = torch.arange(max_seq_len, dtype=torch.float32, device = self.device)
+                theta_ik = einsum(seq_pos, theta_k, "n,d->n d")
+                # cos, sin, in shape (max_seq_len, d_k/2)
+                cos_theta = torch.cos(theta_ik)
+                sin_theta = torch.sin(theta_ik)
+                # cast to (max_seq_len, d_k)
+                cos_vals = torch.repeat_interleave(cos_theta, 2, dim = -1)
+                sin_vals = torch.repeat_interleave(sin_theta, 2, dim = -1)
+                self.register_buffer("cos_cache", cos_vals, persistent=False)
+                self.register_buffer("sin_cache", sin_vals, persistent=False)
+        
+        def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
+                # equations
+                # for pos i, the dim 2k and 2k+1
+                # [x_2k, x_2k + 1]_rotated = [row#1: cos(theta_k), -sin(theta_k); row#2: sin(theta_k), cos(theta_k)] * [x_2k, x_2k + 1]
+                # which equals to x_2k_rotated = x_2k* cos - x_2k+1 * sin
+                # x_2k+1_rotated = x_2k*sin + x_2k+1 * cos
+
+                # get the cos and sin from buffer
+                # cos and sin will be (..., seq_len, d_k) shape
+                cos = self.cos_cache[token_positions]
+                sin = self.sin_cache[token_positions]
+                # crate a x_rot which will cast x_2k to -x_2k+1 (for even idx) and x_2k+1 to x_2k (for odd idx)
+                # then the equaiton above will become
+                # x * cos + x_rot * sin
+                x_rot = torch.empty_like(x)
+                # even idx
+                x_rot[..., 0::2] = -x[..., 1::2]
+                x_rot[..., 1::2] = x[..., 0::2]
+                # element wise multiply, both shape is (..., seq, d_k).
+                return x*cos + x_rot*sin
