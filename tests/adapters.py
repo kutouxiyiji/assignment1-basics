@@ -17,7 +17,7 @@ from jaxtyping import Bool, Float, Int  # pyright: ignore[reportMissingImports]
 from torch import Tensor
 from cs336_basics.tokenizer import BEP_tokenizer_trainer
 from cs336_basics.tokenizer_endecoder import TokenizerEnDeCoder
-from cs336_basics.transformer_utils import MyLiner, MyEmbedding, MyRMSNorm, MySwiGLU, RotaryPositionalEmbedding, mySoftMax
+from cs336_basics.transformer_utils import MyLiner, MyEmbedding, MyRMSNorm, MySwiGLU, RotaryPositionalEmbedding, mySoftMax, scaled_dot_product_attention
 
 
 def run_linear(
@@ -122,7 +122,7 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
-    raise NotImplementedError
+    return scaled_dot_product_attention(Q, K, V, mask)
 
 
 def run_multihead_self_attention(

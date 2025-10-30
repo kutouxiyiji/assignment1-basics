@@ -136,3 +136,12 @@ def mySoftMax(x: torch.Tensor, i: int) -> torch.Tensor:
         sum_exp = torch.sum(shifted_x_exp, dim= i, keepdim=True)
         return shifted_x_exp / sum_exp
         
+
+def scaled_dot_product_attention(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, mask: torch.Tensor = None):
+        # Q is shape (n, d), K is shape (m, d) and V is shape (m, d).
+        d_k = Q.shape[-1]
+        QK = einsum(Q, K, "... Query_len dmodel, ... Key_len dmodel -> ... Query_len Key_len")
+        QK_norm = QK / torch.sqrt(torch.tensor(d_k, dtype=Q.dtype, device=Q.device))
+        if mask is not None:
+                QK_norm = QK_norm + torch.where(mask, 0, float("-inf"))
+        return mySoftMax(QK_norm, -1) @ V
