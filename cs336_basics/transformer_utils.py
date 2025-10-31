@@ -225,3 +225,22 @@ class MyTransformerBlock(torch.nn.Module):
                 norm_attention_output = self.rmsn2.forward(attention_sublayer_output)
                 ffn_output = self.swiglu.forward(norm_attention_output)
                 return attention_sublayer_output + ffn_output
+
+
+class MyTransfomerLM(torch.nn.Module):
+
+        def __init__(self, vocab_size:int, context_length:int, num_layers:int, d_model:int, num_heads:int, d_ff:int, theta:float = None, *args, **kwargs) -> None:
+                super().__init__(*args, **kwargs)
+                self.num_layers =  num_layers
+                self.embeddings = MyEmbedding(vocab_size, embedding_dim = d_model)
+                self.transformer_blocks = torch.nn.ModuleList([MyTransformerBlock(d_model, num_heads, d_ff, theta, max_seq_len=context_length) for _ in range(num_layers)])
+                self.layer_norm = MyRMSNorm(d_model)
+                self.final_linear = MyLiner(d_model, vocab_size)
+        
+        def forward(self, x:torch.Tensor):
+                x = self.embeddings.forward(x)
+                for i in range(self.num_layers):
+                        x = self.transformer_blocks[i].forward(x)
+                normed_x = self.layer_norm.forward(x)
+                logits = self.final_linear.forward(normed_x)
+                return logits

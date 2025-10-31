@@ -18,7 +18,7 @@ from jaxtyping import Bool, Float, Int  # pyright: ignore[reportMissingImports]
 from torch import Tensor
 from cs336_basics.tokenizer import BEP_tokenizer_trainer
 from cs336_basics.tokenizer_endecoder import TokenizerEnDeCoder
-from cs336_basics.transformer_utils import MyLiner, MyEmbedding, MyRMSNorm, MySwiGLU, RotaryPositionalEmbedding, mySoftMax, scaled_dot_product_attention, MyMultiHeadAttention, MyTransformerBlock
+from cs336_basics.transformer_utils import MyLiner, MyEmbedding, MyRMSNorm, MySwiGLU, RotaryPositionalEmbedding, mySoftMax, scaled_dot_product_attention, MyMultiHeadAttention, MyTransformerBlock, MyTransfomerLM
 
 
 def run_linear(
@@ -48,9 +48,9 @@ def run_linear(
 def run_embedding(
     vocab_size: int,
     d_model: int,
-    weights: Float[Tensor, " vocab_size d_model"],
+    weights: Float[Tensor, " vocab_size d_model"], # pyright: ignore[reportUndefinedVariable]
     token_ids: Int[Tensor, " ..."],
-) -> Float[Tensor, " ... d_model"]:
+) -> Float[Tensor, " ... d_model"]: # pyright: ignore[reportUndefinedVariable]
     """
     Given the weights of an Embedding layer, get the embeddings for a batch of token ids.
 
@@ -71,11 +71,11 @@ def run_embedding(
 def run_swiglu(
     d_model: int,
     d_ff: int,
-    w1_weight: Float[Tensor, " d_ff d_model"],
-    w2_weight: Float[Tensor, " d_model d_ff"],
-    w3_weight: Float[Tensor, " d_ff d_model"],
-    in_features: Float[Tensor, " ... d_model"],
-) -> Float[Tensor, " ... d_model"]:
+    w1_weight: Float[Tensor, " d_ff d_model"], # pyright: ignore[reportUndefinedVariable]
+    w2_weight: Float[Tensor, " d_model d_ff"], # pyright: ignore[reportUndefinedVariable]
+    w3_weight: Float[Tensor, " d_ff d_model"], # pyright: ignore[reportUndefinedVariable]
+    in_features: Float[Tensor, " ... d_model"], # pyright: ignore[reportUndefinedVariable]
+) -> Float[Tensor, " ... d_model"]: # pyright: ignore[reportUndefinedVariable]
     """Given the weights of a SwiGLU network, return
     the output of your implementation with these weights.
 
@@ -445,7 +445,36 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    d_k = d_model // num_heads
+    device = in_indices.device
+    transformer_lm = MyTransfomerLM(vocab_size, context_length, num_layers, d_model, num_heads, d_ff, rope_theta)
+    transformer_lm.embeddings.embeddings.data.copy_(weights["token_embeddings.weight"]).to(device)  
+    for layer_idx in range(num_layers):
+        q_proj = weights[f"layers.{layer_idx}.attn.q_proj.weight"]
+        k_proj = weights[f"layers.{layer_idx}.attn.k_proj.weight"]
+        v_proj = weights[f"layers.{layer_idx}.attn.v_proj.weight"]
+        o_proj = weights[f"layers.{layer_idx}.attn.output_proj.weight"]
+        ln1 = weights[f"layers.{layer_idx}.ln1.weight"]
+        ffn_w1 = weights[f"layers.{layer_idx}.ffn.w1.weight"]
+        ffn_w2 = weights[f"layers.{layer_idx}.ffn.w2.weight"]
+        ffn_w3 = weights[f"layers.{layer_idx}.ffn.w3.weight"]
+        ln2 = weights[f"layers.{layer_idx}.ln2.weight"]
+        for i in range(num_heads):
+            head_q = q_proj[i*d_k:(i+1)*d_k, :].T.to(device)  # (d_k, d_in) -> (d_in, d_k)
+            head_k = k_proj[i*d_k:(i+1)*d_k, :].T.to(device)  # (d_k, d_in) -> (d_in, d_k)
+            head_v = v_proj[i*d_k:(i+1)*d_k, :].T.to(device)  # (d_k, d_in) -> (d_in, d_k)
+            transformer_lm.transformer_blocks[layer_idx].multi_attentions.q_heads[i].weights.data.copy_(head_q)
+            transformer_lm.transformer_blocks[layer_idx].multi_attentions.k_heads[i].weights.data.copy_(head_k)
+            transformer_lm.transformer_blocks[layer_idx].multi_attentions.v_heads[i].weights.data.copy_(head_v)
+        transformer_lm.transformer_blocks[layer_idx].multi_attentions.attention_output.weights.data.copy_(o_proj.T).to(device)
+        transformer_lm.transformer_blocks[layer_idx].rmsn1.gains.data.copy_(ln1).to(device)
+        transformer_lm.transformer_blocks[layer_idx].swiglu.linear1.weights.data.copy_(ffn_w1.T).to(device)
+        transformer_lm.transformer_blocks[layer_idx].swiglu.linear2.weights.data.copy_(ffn_w2.T).to(device)
+        transformer_lm.transformer_blocks[layer_idx].swiglu.linear3.weights.data.copy_(ffn_w3.T).to(device)
+        transformer_lm.transformer_blocks[layer_idx].rmsn2.gains.data.copy_(ln2).to(device)
+    transformer_lm.layer_norm.gains.data.copy_(weights["ln_final.weight"]).to(device)
+    transformer_lm.final_linear.weights.data.copy_(weights["lm_head.weight"].T).to(device)
+    return transformer_lm.forward(in_indices)
 
 
 def run_rmsnorm(
