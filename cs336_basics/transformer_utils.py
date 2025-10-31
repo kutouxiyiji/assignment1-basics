@@ -145,3 +145,55 @@ def scaled_dot_product_attention(Q: torch.Tensor, K: torch.Tensor, V: torch.Tens
         if mask is not None:
                 QK_norm = QK_norm + torch.where(mask, 0, float("-inf"))
         return mySoftMax(QK_norm, -1) @ V
+
+
+class MyMultiHeadAttention(torch.nn.Module):
+
+        def __init__(self, d_model:int, num_heads:int, d_in:int = None, d_out:int = None, theta:float = None, max_seq_len: int = None, *args, **kwargs) -> None:
+                super().__init__(*args, **kwargs)
+                self.d_model = d_model
+                self.num_heads = num_heads
+                self.max_seq_len = max_seq_len
+                if d_model % num_heads != 0:
+                        raise ValueError("d_k should be an interger!")
+                self.d_k = d_model // num_heads
+                #input (... d_in), usually d_in is d_k
+                # Q heads, ... d_in, d_in d_k -> ... d_k
+                if d_in is None:
+                        d_in = self.d_k
+                self.d_in = d_in
+                self.q_heads = torch.nn.ModuleList([MyLiner(self.d_in, self.d_k) for _ in range(self.num_heads)])
+                self.k_heads = torch.nn.ModuleList([MyLiner(self.d_in, self.d_k) for _ in range(self.num_heads)])
+                self.v_heads = torch.nn.ModuleList([MyLiner(self.d_in, self.d_k) for _ in range(self.num_heads)])
+                if d_out is None:
+                        self.d_out = self.d_model
+                self.attention_output = MyLiner(self.d_model, self.d_out)
+                self.rope = None
+                if theta is not None and max_seq_len is not None:
+                        self.rope = RotaryPositionalEmbedding(theta, self.d_k, max_seq_len)
+        
+        def forward(self, x: torch.Tensor):
+                seq_len = x.shape[-2]
+                # Create causal mask: lower triangular (seq_len, seq_len)
+                causal_mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device))
+                
+                # Expand mask to match batch dimensions: (..., seq_len, seq_len)
+                batch_dims = x.shape[:-2]  # All dimensions before (seq_len, d_in)
+                for _ in batch_dims:
+                        # Adds a leading dimension to causal_mask once per batch dimension.
+                        causal_mask = causal_mask.unsqueeze(0)
+                # Final shape: (batch_size, ..., seq_len, seq_len).
+                causal_mask = causal_mask.expand(*batch_dims, seq_len, seq_len)
+                
+                multi_head_attentions = []
+                token_positions = torch.arange(seq_len)
+                for head in range(self.num_heads):
+                        Q = self.q_heads[head].forward(x) # W*In = Q_i
+                        K = self.k_heads[head].forward(x)
+                        if self.rope is not None:
+                                Q = self.rope.forward(Q, token_positions)
+                                K = self.rope.forward(K, token_positions)
+                        V = self.v_heads[head].forward(x)
+                        multi_head_attentions.append(scaled_dot_product_attention(Q, K, V, causal_mask))
+                concat_attentions = torch.concat(multi_head_attentions, dim = -1)
+                return self.attention_output.forward(concat_attentions)

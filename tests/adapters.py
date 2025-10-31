@@ -17,7 +17,7 @@ from jaxtyping import Bool, Float, Int  # pyright: ignore[reportMissingImports]
 from torch import Tensor
 from cs336_basics.tokenizer import BEP_tokenizer_trainer
 from cs336_basics.tokenizer_endecoder import TokenizerEnDeCoder
-from cs336_basics.transformer_utils import MyLiner, MyEmbedding, MyRMSNorm, MySwiGLU, RotaryPositionalEmbedding, mySoftMax, scaled_dot_product_attention
+from cs336_basics.transformer_utils import MyLiner, MyEmbedding, MyRMSNorm, MySwiGLU, RotaryPositionalEmbedding,mySoftMax, scaled_dot_product_attention, MyMultiHeadAttention
 
 
 def run_linear(
@@ -156,7 +156,26 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    # Get d_in from input features
+    d_in = in_features.shape[-1]
+    d_k = d_model // num_heads
+    
+    multi_attention = MyMultiHeadAttention(d_model, num_heads, d_in=d_in)
+    
+    # Split weights for each head: q_proj_weight has shape (num_heads * d_k, d_in)
+    # Each head gets (d_k, d_in) slice, then transpose to (d_in, d_k) for MyLiner
+    for i in range(num_heads):
+        head_q = q_proj_weight[i*d_k:(i+1)*d_k, :].T  # (d_k, d_in) -> (d_in, d_k)
+        head_k = k_proj_weight[i*d_k:(i+1)*d_k, :].T  # (d_k, d_in) -> (d_in, d_k)
+        head_v = v_proj_weight[i*d_k:(i+1)*d_k, :].T  # (d_k, d_in) -> (d_in, d_k)
+        multi_attention.q_heads[i].weights.data = head_q
+        multi_attention.k_heads[i].weights.data = head_k
+        multi_attention.v_heads[i].weights.data = head_v
+    
+    # o_proj_weight has shape (d_model, d_model) = (d_model, num_heads * d_k)
+    # MyLiner expects (in_features, out_features) = (num_heads * d_k, d_model)
+    multi_attention.attention_output.weights.data = o_proj_weight.T
+    return multi_attention.forward(in_features)
 
 
 def run_multihead_self_attention_with_rope(
@@ -196,7 +215,26 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    # Get d_in from input features
+    d_in = in_features.shape[-1]
+    d_k = d_model // num_heads
+    
+    multi_attention = MyMultiHeadAttention(d_model, num_heads, d_in=d_in, theta=theta, max_seq_len=max_seq_len)
+    
+    # Split weights for each head: q_proj_weight has shape (num_heads * d_k, d_in)
+    # Each head gets (d_k, d_in) slice, then transpose to (d_in, d_k) for MyLiner
+    for i in range(num_heads):
+        head_q = q_proj_weight[i*d_k:(i+1)*d_k, :].T  # (d_k, d_in) -> (d_in, d_k)
+        head_k = k_proj_weight[i*d_k:(i+1)*d_k, :].T  # (d_k, d_in) -> (d_in, d_k)
+        head_v = v_proj_weight[i*d_k:(i+1)*d_k, :].T  # (d_k, d_in) -> (d_in, d_k)
+        multi_attention.q_heads[i].weights.data = head_q
+        multi_attention.k_heads[i].weights.data = head_k
+        multi_attention.v_heads[i].weights.data = head_v
+    
+    # o_proj_weight has shape (d_model, d_model) = (d_model, num_heads * d_k)
+    # MyLiner expects (in_features, out_features) = (num_heads * d_k, d_model)
+    multi_attention.attention_output.weights.data = o_proj_weight.T
+    return multi_attention.forward(in_features)
 
 
 def run_rope(
