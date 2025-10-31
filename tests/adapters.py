@@ -13,11 +13,12 @@ from typing import IO, Any, BinaryIO
 
 import numpy.typing as npt
 import torch
+from torch.nn.modules import transformer
 from jaxtyping import Bool, Float, Int  # pyright: ignore[reportMissingImports]
 from torch import Tensor
 from cs336_basics.tokenizer import BEP_tokenizer_trainer
 from cs336_basics.tokenizer_endecoder import TokenizerEnDeCoder
-from cs336_basics.transformer_utils import MyLiner, MyEmbedding, MyRMSNorm, MySwiGLU, RotaryPositionalEmbedding,mySoftMax, scaled_dot_product_attention, MyMultiHeadAttention
+from cs336_basics.transformer_utils import MyLiner, MyEmbedding, MyRMSNorm, MySwiGLU, RotaryPositionalEmbedding, mySoftMax, scaled_dot_product_attention, MyMultiHeadAttention, MyTransformerBlock
 
 
 def run_linear(
@@ -330,7 +331,39 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    # Get d_in from input features
+    d_in = in_features.shape[-1]
+    d_k = d_model // num_heads
+    
+    transformer_block = MyTransformerBlock(d_model, num_heads, d_ff, theta, max_seq_len)
+    
+    # Get device from input features to ensure weights are on the same device
+    device = in_features.device
+    
+    # Split weights for each head: weights have shape (d_model, d_model) = (num_heads * d_k, d_in)
+    # Each head gets (d_k, d_in) slice, then transpose to (d_in, d_k) for MyLiner
+    for i in range(num_heads):
+        head_q = weights["attn.q_proj.weight"][i*d_k:(i+1)*d_k, :].T.to(device)  # (d_k, d_in) -> (d_in, d_k)
+        head_k = weights["attn.k_proj.weight"][i*d_k:(i+1)*d_k, :].T.to(device)  # (d_k, d_in) -> (d_in, d_k)
+        head_v = weights["attn.v_proj.weight"][i*d_k:(i+1)*d_k, :].T.to(device)  # (d_k, d_in) -> (d_in, d_k)
+        transformer_block.multi_attentions.q_heads[i].weights.data.copy_(head_q)
+        transformer_block.multi_attentions.k_heads[i].weights.data.copy_(head_k)
+        transformer_block.multi_attentions.v_heads[i].weights.data.copy_(head_v)
+    # o_proj_weight has shape (d_model, d_model) = (d_model, num_heads * d_k)
+    # MyLiner expects (in_features, out_features) = (num_heads * d_k, d_model)
+    transformer_block.multi_attentions.attention_output.weights.data = weights["attn.output_proj.weight"].T.to(device)
+    transformer_block.rmsn1.gains.data = weights["ln1.weight"].to(device)
+    # PyTorch stores Linear weights as (out_features, in_features), but MyLiner expects (in_features, out_features)
+    # So we need to transpose:
+    # ffn.w1.weight from state dict: (d_ff, d_model) -> transpose to (d_model, d_ff) for linear1
+    # ffn.w2.weight from state dict: (d_model, d_ff) -> transpose to (d_ff, d_model) for linear2
+    # ffn.w3.weight from state dict: (d_ff, d_model) -> transpose to (d_model, d_ff) for linear3
+    transformer_block.swiglu.linear1.weights.data = weights["ffn.w1.weight"].T.to(device)
+    transformer_block.swiglu.linear2.weights.data = weights["ffn.w2.weight"].T.to(device)
+    transformer_block.swiglu.linear3.weights.data = weights["ffn.w3.weight"].T.to(device)
+    transformer_block.rmsn2.gains.data = weights["ln2.weight"].to(device)
+    return transformer_block.forward(in_features)
+
 
 
 def run_transformer_lm(

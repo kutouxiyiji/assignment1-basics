@@ -160,7 +160,7 @@ class MyMultiHeadAttention(torch.nn.Module):
                 #input (... d_in), usually d_in is d_k
                 # Q heads, ... d_in, d_in d_k -> ... d_k
                 if d_in is None:
-                        d_in = self.d_k
+                        d_in = self.d_model
                 self.d_in = d_in
                 self.q_heads = torch.nn.ModuleList([MyLiner(self.d_in, self.d_k) for _ in range(self.num_heads)])
                 self.k_heads = torch.nn.ModuleList([MyLiner(self.d_in, self.d_k) for _ in range(self.num_heads)])
@@ -186,7 +186,15 @@ class MyMultiHeadAttention(torch.nn.Module):
                 causal_mask = causal_mask.expand(*batch_dims, seq_len, seq_len)
                 
                 multi_head_attentions = []
-                token_positions = torch.arange(seq_len)
+                # Create token positions matching batch dimensions: (..., seq_len)
+                # For batched input (batch, seq_len, d_in), positions should be (batch, seq_len)
+                token_positions_base = torch.arange(seq_len, device=x.device)
+                # Expand to match batch dimensions if needed
+                if len(batch_dims) > 0:
+                        token_positions = token_positions_base.unsqueeze(0).expand(*batch_dims, seq_len)
+                else:
+                        token_positions = token_positions_base
+                
                 for head in range(self.num_heads):
                         Q = self.q_heads[head].forward(x) # W*In = Q_i
                         K = self.k_heads[head].forward(x)
@@ -197,3 +205,23 @@ class MyMultiHeadAttention(torch.nn.Module):
                         multi_head_attentions.append(scaled_dot_product_attention(Q, K, V, causal_mask))
                 concat_attentions = torch.concat(multi_head_attentions, dim = -1)
                 return self.attention_output.forward(concat_attentions)
+
+class MyTransformerBlock(torch.nn.Module):
+
+        def __init__(self, d_model:int, num_heads:int, d_ff:int, theta:float = None, max_seq_len: int = None, *args, **kwargs) -> None:
+                super().__init__(*args, **kwargs)
+                self.num_heads = num_heads
+                self.d_ff = d_ff
+                self.d_model = d_model
+                self.rmsn1 = MyRMSNorm(d_model)
+                self.multi_attentions = MyMultiHeadAttention(d_model, num_heads, theta=theta, max_seq_len=max_seq_len)
+                self.rmsn2 = MyRMSNorm(d_model)
+                self.swiglu = MySwiGLU(d_model, d_ff)
+        
+        def forward(self, x: torch.Tensor):
+                norm_x = self.rmsn1.forward(x)
+                attentions = self.multi_attentions(norm_x)
+                attention_sublayer_output = x + attentions
+                norm_attention_output = self.rmsn2.forward(attention_sublayer_output)
+                ffn_output = self.swiglu.forward(norm_attention_output)
+                return attention_sublayer_output + ffn_output
