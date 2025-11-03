@@ -245,7 +245,7 @@ class MyTransfomerLM(torch.nn.Module):
                 logits = self.final_linear.forward(normed_x)
                 return logits
 
-def my_cross_entropy(logits: torch.Tensor, targets: torch.Tensor, dim: int = -1):
+def my_cross_entropy(logits: torch.Tensor, targets: torch.Tensor, dim: int = -1, reduction: str = 'mean'):
         max_logit = torch.max(logits, dim=dim, keepdim=True)[0]
         shifted_logits = logits - max_logit
         log_sum_exp = torch.log(torch.sum(torch.exp(shifted_logits), dim=dim))
@@ -254,4 +254,37 @@ def my_cross_entropy(logits: torch.Tensor, targets: torch.Tensor, dim: int = -1)
         target_logits = shifted_logits[batch_indices, targets]
         # Cross-entropy: -log_prob = -target_logit + log_sum_exp
         loss_per_sample = -target_logits + log_sum_exp
-        return loss_per_sample.mean()
+        
+        if reduction == 'mean':
+                return loss_per_sample.mean()
+        elif reduction == 'none':
+                return loss_per_sample
+        else:
+                raise ValueError(f"Invalid reduction mode: {reduction}")
+
+
+def my_perplexity(seq_logits: torch.Tensor, seq_targets: torch.Tensor):
+        """
+        Compute perplexity for sequences.
+        
+        perplexity = exp((1/m) * Σℓᵢ) where ℓᵢ is the cross-entropy for position i
+        
+        Args:
+            seq_logits: (batch, seq_len, vocab_size) or (seq_len, vocab_size)
+            seq_targets: (batch, seq_len) or (seq_len,)
+        
+        Returns:
+            Perplexity: (batch,) or scalar
+        """
+        original_shape = seq_targets.shape
+        # Flatten to 2D for cross-entropy computation
+        logits_2d = seq_logits.view(-1, seq_logits.size(-1))  # (batch*seq, vocab)
+        targets_1d = seq_targets.view(-1)  # (batch*seq,)
+        # Get per-token losses (no averaging)
+        per_token_losses = my_cross_entropy(logits_2d, targets_1d, reduction='none')
+        # Reshape back to original batch/seq structure
+        per_token_losses = per_token_losses.view(original_shape)  # (batch, seq) or (seq,)
+        # Average along sequence dimension: (1/m) * Σℓᵢ
+        avg_loss = per_token_losses.mean(dim=-1)  # (batch,) or scalar
+        # Take exponential: exp(average)
+        return torch.exp(avg_loss) 
