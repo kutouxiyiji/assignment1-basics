@@ -231,7 +231,7 @@ class MyTransfomerLM(torch.nn.Module):
 
         def __init__(self, vocab_size:int, context_length:int, num_layers:int, d_model:int, num_heads:int, d_ff:int, theta:float = None, *args, **kwargs) -> None:
                 super().__init__(*args, **kwargs)
-                self.num_layers =  num_layers
+                self.num_layers = num_layers
                 self.embeddings = MyEmbedding(vocab_size, embedding_dim = d_model)
                 self.transformer_blocks = torch.nn.ModuleList([MyTransformerBlock(d_model, num_heads, d_ff, theta, max_seq_len=context_length) for _ in range(num_layers)])
                 self.layer_norm = MyRMSNorm(d_model)
@@ -244,3 +244,14 @@ class MyTransfomerLM(torch.nn.Module):
                 normed_x = self.layer_norm.forward(x)
                 logits = self.final_linear.forward(normed_x)
                 return logits
+
+def my_cross_entropy(logits: torch.Tensor, targets: torch.Tensor, dim: int = -1):
+        max_logit = torch.max(logits, dim=dim, keepdim=True)[0]
+        shifted_logits = logits - max_logit
+        log_sum_exp = torch.log(torch.sum(torch.exp(shifted_logits), dim=dim))
+        # Select the logit for each target class using advanced indexing
+        batch_indices = torch.arange(logits.size(0), device=logits.device)
+        target_logits = shifted_logits[batch_indices, targets]
+        # Cross-entropy: -log_prob = -target_logit + log_sum_exp
+        loss_per_sample = -target_logits + log_sum_exp
+        return loss_per_sample.mean()
