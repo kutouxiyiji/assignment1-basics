@@ -5,6 +5,9 @@
 # from signal import SIGALRM
 import torch
 from einops import rearrange, einsum  # pyright: ignore[reportMissingImports], using uv
+from collections.abc import Callable, Iterable
+from typing import Optional
+import math
 
 
 class MyLiner(torch.nn.Module):
@@ -250,7 +253,7 @@ def my_cross_entropy(logits: torch.Tensor, targets: torch.Tensor, dim: int = -1,
         shifted_logits = logits - max_logit
         log_sum_exp = torch.log(torch.sum(torch.exp(shifted_logits), dim=dim))
         # Select the logit for each target class using advanced indexing
-        batch_indices = torch.arange(logits.size(0), device=logits.device)
+        batch_indices = torch.arange(logits.size(0), device=logits.device) # assuming it's batch, vocab. logits.size(0) return batch_size
         target_logits = shifted_logits[batch_indices, targets]
         # Cross-entropy: -log_prob = -target_logit + log_sum_exp
         loss_per_sample = -target_logits + log_sum_exp
@@ -288,3 +291,75 @@ def my_perplexity(seq_logits: torch.Tensor, seq_targets: torch.Tensor):
         avg_loss = per_token_losses.mean(dim=-1)  # (batch,) or scalar
         # Take exponential: exp(average)
         return torch.exp(avg_loss) 
+
+class SGD(torch.optim.Optimizer):
+        def __init__(self, params, lr=1e-3):
+                if lr < 0:
+                        raise ValueError(f"Invalid learning rate: {lr}")
+                defaults = {"lr": lr}
+                super().__init__(params, defaults)
+        
+        def step(self, closure: Optional[Callable] = None):
+                loss = None if closure is None else closure()
+                for group in self.param_groups:
+                        lr = group["lr"] # Get the learning rate.
+                        for p in group["params"]:
+                                if p.grad is None:
+                                        continue
+                                state = self.state[p] # Get state associated with p.
+                                t = state.get("t", 0) # Get iteration number from the state, or initial value.
+                                grad = p.grad.data # Get the gradient of loss with respect to p.
+                                p.data -= lr / math.sqrt(t + 1) * grad # Update weight tensor in-place.
+                                state["t"] = t + 1 # Increment iteration number.
+                return loss
+
+
+# test for SGD
+# weights = torch.nn.Parameter(5 * torch.randn((10, 10)))
+# opt = SGD([weights], lr=1e2)
+# for t in range(100):
+#         opt.zero_grad() # Reset the gradients for all learnable parameters.
+#         loss = (weights**2).mean() # Compute a scalar loss value.
+#         print(loss.cpu().item())
+#         loss.backward() # Run backward pass, which computes gradients.
+#         opt.step() # Run optimizer step.
+
+class myAdamW(torch.optim.Optimizer):
+
+        def __init__(self, params, lr: float = 1e-3, betas = (0.9, 0.95), eps = 1e-8, weight_decay = 1e-2, *args, **kwargs) -> None:
+                defaults = {"lr": lr, "betas": betas, "eps": eps, "weight_decay": weight_decay}
+                super().__init__(params, defaults)
+
+        def step(self, closure: Optional[Callable] = None):
+                loss = None if closure is None else closure()
+                for group in self.param_groups:
+                        lr = group["lr"]
+                        beta1, beta2 = group["betas"]
+                        eps = group["eps"]
+                        weight_decay = group["weight_decay"]
+                        for p in group["params"]:
+                                # all model params, for each param p
+                                if p.grad is None:
+                                        continue
+                                grad = p.grad.data
+                                state = self.state[p]
+                                if len(state) == 0:
+                                        state['t'] = 0
+                                        state['m'] = torch.zeros_like(p.data) # momentum, 1st order
+                                        state['v'] = torch.zeros_like(p.data) # velocity, 2nd order
+                                t = state['t']
+                                m = state['m']
+                                v = state['v']
+                                t += 1
+                                state['t'] = t
+                                # m ← β1m + (1 − β1)g, g is grad
+                                m.mul_(beta1).add_(grad, alpha=1-beta1)
+                                # update v, v ← β2v + (1 − β2)g^2
+                                v.mul_(beta2).add_(grad*grad, alpha=1-beta2)
+                                # adjusted lr
+                                lr_adjusted = lr * math.sqrt(1-beta2**t) / (1-beta1**t)
+                                # update parameter
+                                p.data.addcdiv_(m, v.sqrt().add_(eps), value=-lr_adjusted)
+                                # weight decay
+                                p.data.mul_(1-lr*weight_decay)
+                return loss
