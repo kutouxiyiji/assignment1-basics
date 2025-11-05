@@ -363,3 +363,38 @@ class myAdamW(torch.optim.Optimizer):
                                 # weight decay
                                 p.data.mul_(1-lr*weight_decay)
                 return loss
+
+def learning_rate_schedule(it, max_learning_rate, min_learning_rate, warmup_iters, cosine_cycle_iters):
+        t, alpha_max, alpha_min, T_w, T_c = it, max_learning_rate, min_learning_rate, warmup_iters, cosine_cycle_iters
+        if t < T_w:
+                # warm up 
+                return t/T_w*alpha_max
+        elif t < T_c:
+                # cos annealing
+                return (alpha_max + alpha_min) / 2 + (alpha_max - alpha_min) / 2 * math.cos((t-T_w)/(T_c-T_w)*math.pi)
+        else:
+                # post annealing
+                return alpha_min
+
+def gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float, eps: float = 1e-6) -> None:
+        # Collect all gradients from parameters that have them
+        grads = []
+        for p in parameters:
+                if p.grad is not None:
+                        grads.append(p.grad)
+        # If no gradients, nothing to clip
+        if len(grads) == 0:
+                return
+        # Compute the total L2 norm across all gradients
+        # total_norm = sqrt(sum(||grad_i||^2 for all i))
+        total_norm = torch.sqrt(sum(torch.sum(g ** 2) for g in grads))
+        # Compute the clipping coefficient
+        clip_coef = max_l2_norm / (total_norm + eps)
+        
+        # Only clip if the total norm exceeds max_l2_norm
+        # clip_coef will be < 1 when total_norm > max_l2_norm
+        clip_coef_clamped = min(clip_coef, 1.0)
+        
+        # Scale all gradients by the clipping coefficient
+        for g in grads:
+                g.mul_(clip_coef_clamped)
