@@ -75,11 +75,11 @@ def parse_training_args():
     parser.add_argument('--special_token_list', type=list, default = ['<|endoftext|>'], help = 'The list of special tokens for the tokenizer.')
 
     # Model parameters
-    parser.add_argument('--vocab_size', type=int, required=True, help='Vocabulary size')
+    parser.add_argument('--vocab_size', type=int, default=10000, help='Vocabulary size')
     parser.add_argument('--num_layers', type=int, default=4, help='Number of transformer layers')
-    parser.add_argument('--d_model', type=int, default=512, help='Model dimension')
+    parser.add_argument('--d_model', type=int, default=256, help='Model dimension')
     parser.add_argument('--num_heads', type=int, default=6, help='Number of attention heads')
-    parser.add_argument('--d_ff', type=int, default=2048, help='Feed-forward dimension')
+    parser.add_argument('--d_ff', type=int, default=1024, help='Feed-forward dimension')
     parser.add_argument('--theta', type=float, default=10000.0, help='RoPE theta parameter')
     
     # Optimizer parameters
@@ -225,18 +225,33 @@ def main_training(config: dict):
     )
     # training loop
     for iter in range(config['max_iters']):
+        # Zero gradients from previous iteration
+        opt.zero_grad()
+        
+        # Load batch
         batch_training_data, batch_training_label = data_loading(train_data, config['batch_size'], config['contex_length'], config['device'])
         batch_val_data, batch_val_label = data_loading(val_data, config['batch_size'], config['contex_length'], config['device'])
         # forwards
         logits = model.forward(batch_training_data)
-        # loss
+        
+        # Compute loss
         loss = transformer_utils.my_cross_entropy(logits.view(-1, config['vocab_size']), batch_training_label.view(-1,))
-        # backward
+        
+        # Backward pass
         loss.backward()
-        # clip first
+        
+        # Gradient clipping
         transformer_utils.gradient_clipping(model.parameters(), config['max_l2_norm'])
-        # opt
-        opt.zero_grad()
+        
+        # Update learning rate schedule
+        for group in opt.param_groups:
+            group['lr'] = transformer_utils.learning_rate_schedule(iter,
+                                                                   config['max_learning_rate'],
+                                                                   config['min_learning_rate'],
+                                                                   config['warmup_iters'],
+                                                                   config['cosine_cycle_iters'])
+        
+        # Optimizer step
         opt.step()
         # log loss
         if iter % config['eval_interval'] == 0:
