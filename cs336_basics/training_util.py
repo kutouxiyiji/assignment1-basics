@@ -1,3 +1,4 @@
+from typing import Any
 import torch
 import numpy as np
 import os
@@ -30,9 +31,9 @@ def data_loading(dataset: np.ndarray, batch_size: int, context_length: int, devi
     inputs_array = np.array(inputs)
     labels_array = np.array(labels)
     
-    # Convert to torch tensors and move to device
-    inputs_tensor = torch.from_numpy(inputs_array).to(device)
-    labels_tensor = torch.from_numpy(labels_array).to(device)
+    # Convert to torch tensors (long type for embedding lookup) and move to device
+    inputs_tensor = torch.from_numpy(inputs_array).long().to(device)
+    labels_tensor = torch.from_numpy(labels_array).long().to(device)
     
     return inputs_tensor, labels_tensor
 
@@ -59,11 +60,13 @@ def parse_training_args():
     parser = argparse.ArgumentParser(description='Train a transformer language model')
     
     # Option 1: Load all params from a config file
-    parser.add_argument('--config', type=str, help='Path to JSON config file with all parameters')
+    parser.add_argument('--config', type=str, default = '', help='Path to JSON config file with all parameters')
     
     # Option 2: Individual CLI arguments
-    # Do process?
-    parser.add_argument('--preprocess_data', type=bool, default=False, help='Pre-process the data if needed. Tokenize the input text once and save for later.')
+    # Preprocessing flag
+    parser.add_argument('--preprocess-data', dest='preprocess_data', action='store_true', help='Tokenize text data and save to memmap files')
+    parser.add_argument('--no-preprocess-data', dest='preprocess_data', action='store_false', help='Skip preprocessing, use existing memmap files')
+    parser.set_defaults(preprocess_data=False)  # Default: skip preprocessing
     # Data parameters
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training')
     parser.add_argument('--context_length', type=int, default=128, help='Context length for sequences')
@@ -71,7 +74,7 @@ def parse_training_args():
     # Tokenizer parameters 
     # './tokenizer_output/tinystory_train_10000vocab/vocab.json', './tokenizer_output/tinystory_train_10000vocab/merges.txt', ['<|endoftext|>']
     parser.add_argument('--vocab_filepath', type=str, default='./tokenizer_output/tinystory_train_10000vocab/vocab.json', help = 'The input file for vocab for the tokenizer.')
-    parser.add_argument('--merges_filepath', type=str, defaul= './tokenizer_output/tinystory_train_10000vocab/merges.txt', help = 'The merge rules for the tokenizer.')
+    parser.add_argument('--merges_filepath', type=str, default= './tokenizer_output/tinystory_train_10000vocab/merges.txt', help = 'The merge rules for the tokenizer.')
     parser.add_argument('--special_token_list', type=list, default = ['<|endoftext|>'], help = 'The list of special tokens for the tokenizer.')
 
     # Model parameters
@@ -98,16 +101,20 @@ def parse_training_args():
     parser.add_argument('--max_l2_norm', type=float, default=1.0, help='Max L2 norm for gradient clipping')
     
     # Training parameters
-    parser.add_argument('--max_iters', type=int, default=10000, help='Maximum training iterations')
-    parser.add_argument('--eval_interval', type=int, default=100, help='Evaluation interval')
-    parser.add_argument('--checkpoint_interval', type=int, default=1000, help='Checkpoint save interval')
+    parser.add_argument('--max_iters', type=int, default=100, help='Maximum training iterations')
+    parser.add_argument('--eval_interval', type=int, default=10, help='Evaluation interval')
+    parser.add_argument('--checkpoint_interval', type=int, default=50, help='Checkpoint save interval')
     parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints', help='Directory to save checkpoints')
     
     # Data paths
-    parser.add_argument('--preprocess_train_data', type=str, default = './data/preproces/train_tokens.bin', help='Path to preprocessed train data in bin.')
-    parser.add_argument('--preprocess_val_data', type=str, default = './data/preproces/val_tokens.bin', help='Path to preprocessed val data in bin.')
-    parser.add_argument('--train_data', type=str, default = './data/TinyStoriesV2-GPT4-train.txt', help='Path to training data. It\'s default to a txt file.')
+    parser.add_argument('--preprocess_train_data', type=str, default = './data/preprocess/train_tokens.bin', help='Path to preprocessed train data in bin.')
+    parser.add_argument('--preprocess_val_data', type=str, default = './data/preprocess/val_tokens.bin', help='Path to preprocessed val data in bin.')
+    parser.add_argument('--train_data', type=str, default = './data/TinyStoriesV2-GPT4-valid.txt', help='Path to training data. It\'s default to a txt file.')
     parser.add_argument('--val_data', type=str, default = './data/TinyStoriesV2-GPT4-valid.txt', help='Path to validation data. It\'s default to a txt file.')
+    
+    # Testing parameters
+    parser.add_argument('--test_mode', action='store_true', help='Enable test mode to load only a small portion of data')
+    parser.add_argument('--test_data_size', type=int, default=10000, help='Number of characters to load in test mode')
     # parser.add_argument('--tokenizer_vocab', type=str, required=True, help='Path to tokenizer vocab')
     # parser.add_argument('--tokenizer_merges', type=str, required=True, help='Path to tokenizer merges')
     
@@ -115,19 +122,42 @@ def parse_training_args():
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', 
                         help='Device to use for training')
     
-    args = parser.parse_args()
+    # Parse args to get config file path first
+    args, remaining_argv = parser.parse_known_args()
     
-    # If config file is provided, load it and override defaults
+    # If config file is provided, load it and set as defaults
     if args.config:
         with open(args.config, 'r') as f:
             config_dict = json.load(f)
-        # Update args with config file values (CLI args take precedence)
-        for key, value in config_dict.items():
-            if not hasattr(args, key) or getattr(args, key) == parser.get_default(key): # not set or it's default
-                setattr(args, key, value)
+        # Set config values as new defaults
+        parser.set_defaults(**config_dict)
+    
+    # Parse all args again (CLI args will override config defaults)
+    args = parser.parse_args()
     
     # Convert args to dictionary
     return vars(args)
+
+def save_tokens_to_memmap(tokens_iter, output_path, dtype=np.uint16):
+    """
+    Convert an iterator of tokens to a memory-mapped file.
+    
+    Args:
+        tokens_iter: Iterator yielding token IDs
+        output_path: Path to save the binary file
+        dtype: Data type for tokens (uint16 supports vocab up to 65536)
+    
+    Returns:
+        np.memmap: Memory-mapped array of tokens
+    """
+    # Collect all tokens from iterator into a list
+    tokens_list = list[Any](tokens_iter)
+    # Convert to numpy array
+    tokens_array = np.array(tokens_list, dtype=dtype)
+    # Save to binary file
+    tokens_array.tofile(output_path)
+    # Return as memmap (read-only mode for training)
+    return np.memmap(output_path, dtype=dtype, mode='r')
 
 def save_tokens_to_memmap_chunked(tokens_iter, output_path, dtype=np.uint16, chunk_size=1000000):
     """
@@ -143,6 +173,7 @@ def save_tokens_to_memmap_chunked(tokens_iter, output_path, dtype=np.uint16, chu
     # Open file in binary write mode
     with open(output_path, 'wb') as f:
         chunk = []
+        iter = 0
         for token in tokens_iter:
             chunk.append(token)
             if len(chunk) >= chunk_size:
@@ -150,30 +181,57 @@ def save_tokens_to_memmap_chunked(tokens_iter, output_path, dtype=np.uint16, chu
                 arr = np.array(chunk, dtype=dtype)
                 arr.tofile(f)
                 chunk = []
+                print(f'wrote chunk: {iter + 1} to file.')
+                iter += 1
         # Write remaining tokens
         if chunk:
             arr = np.array(chunk, dtype=dtype)
             arr.tofile(f)
+            print(f'wrote remaining chunk to file.')
     # Return as memmap
     return np.memmap(output_path, dtype=dtype, mode='r')
 
-def pre_process(config:dict):
+def pre_process(config:dict, save_in_chunk:bool = True):
     if not config['preprocess_data']:
-        pass
+        return
+    
+    # Ensure output directories exist
+    os.makedirs(os.path.dirname(config['preprocess_train_data']), exist_ok=True)
+    os.makedirs(os.path.dirname(config['preprocess_val_data']), exist_ok=True)
+    
     # load tokenizer
     tokenizer = tokenizer_endecoder.TokenizerEnDeCoder.from_files(config['vocab_filepath'], config['merges_filepath'], config['special_token_list'])
     print('Created the tokenizer from files.')
+    
     # load training data input path
     with open(config['train_data'], 'r', encoding='utf-8') as f:
-        train_text = f.read()
+        if config.get('test_mode', False):
+            # In test mode, only read a small portion
+            train_text = f.read(config['test_data_size'])
+            print(f'Test mode: loaded first {config["test_data_size"]} characters from train data')
+        else:
+            train_text = f.read()
+            
     with open(config['val_data'], 'r', encoding='utf-8') as f:
-        val_text = f.read()
-    print('Loaded the train and val data txt files.')
+        if config.get('test_mode', False):
+            # In test mode, only read a small portion
+            val_text = f.read(config['test_data_size'])
+            print(f'Test mode: loaded first {config["test_data_size"]} characters from val data')
+        else:
+            val_text = f.read()
+            
+    print(f'Loaded the train ({config["train_data"]}) and val ({config["val_data"]}) data txt files.')
+    
     # tokenize
     train_tokens = tokenizer.encode_iterable(train_text)
     val_tokens = tokenizer.encode_iterable(val_text)
-    save_tokens_to_memmap_chunked(train_tokens, config['preprocess_train_data'])
-    save_tokens_to_memmap_chunked(val_tokens, config['preprocess_val_data'])
+    
+    if save_in_chunk:
+        save_tokens_to_memmap_chunked(train_tokens, config['preprocess_train_data'])
+        save_tokens_to_memmap_chunked(val_tokens, config['preprocess_val_data'])
+    else:
+        save_tokens_to_memmap(train_tokens, config['preprocess_train_data'])
+        save_tokens_to_memmap(val_tokens, config['preprocess_val_data'])
     print('save the tokens into memmap.')
 
 
@@ -202,11 +260,15 @@ def main_training(config: dict):
     
     # Load np.memmap from files as train and val tokens.
     print(f"started the main training step...\n")
+    
+    # Ensure checkpoint directory exists
+    os.makedirs(config['checkpoint_dir'], exist_ok=True)
+    
     train_data = np.memmap(config['preprocess_train_data'], dtype=np.uint16, mode='r')
     val_data = np.memmap(config['preprocess_val_data'], dtype=np.uint16, mode='r')
     print(f"Loaded {len(train_data)} training tokens")
     print(f"Loaded {len(val_data)} validation tokens")
-    print(f"Initing the transfomer large models...")
+    print(f"Initing the transformer language model...")
     model = transformer_utils.MyTransfomerLM(
         vocab_size=config['vocab_size'],
         context_length=config['context_length'],
@@ -229,8 +291,8 @@ def main_training(config: dict):
         opt.zero_grad()
         
         # Load batch
-        batch_training_data, batch_training_label = data_loading(train_data, config['batch_size'], config['contex_length'], config['device'])
-        batch_val_data, batch_val_label = data_loading(val_data, config['batch_size'], config['contex_length'], config['device'])
+        batch_training_data, batch_training_label = data_loading(train_data, config['batch_size'], config['context_length'], config['device'])
+        batch_val_data, batch_val_label = data_loading(val_data, config['batch_size'], config['context_length'], config['device'])
         # forwards
         logits = model.forward(batch_training_data)
         
@@ -262,7 +324,10 @@ def main_training(config: dict):
             save_checkpoint(model, opt, iter, checkpoint_path)
     print("Training Complete.")
 
+#######################################################
+# Test command: uv run python cs336_basics/training_util.py --config test_config.json
+#######################################################
 if __name__ == '__main__':
     config = parse_training_args()
-    pre_process()
-    main_training()
+    pre_process(config, save_in_chunk = False)
+    main_training(config)
