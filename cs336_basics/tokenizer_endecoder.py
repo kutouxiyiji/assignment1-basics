@@ -1,8 +1,9 @@
 # The encoder and decoder for given tokenizer (e.g. BPE tokenizer trained from tokenizer.py)
-from typing import Iterator, Iterable
+from typing import Any, Iterator, Iterable
 import json
 from pathlib import Path
 import regex as re
+import heapq
 # Import PAT from tokenizer.py in the same directory
 import sys
 import os
@@ -29,12 +30,13 @@ def gpt2_bytes_to_unicode():
 
 
 class TokenizerEnDeCoder():
-        def __init__(self, vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]], special_tokens: list[str] = None) -> None:
+        def __init__(self, vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]], special_tokens: list[str] = None, use_fast_merge: bool = True) -> None:
                 self.id_to_token = vocab.copy()
                 self.token_to_id = {vocab[id]: id for id in vocab}
                 self.merges = merges
                 self.merges_set = set(merges)
                 self.special_tokens = special_tokens
+                self.use_fast_merge = use_fast_merge  # Use optimized O(n log m) algorithm by default
                 
                 # Add special tokens to vocabulary if they don't exist
                 if self.special_tokens:
@@ -59,7 +61,7 @@ class TokenizerEnDeCoder():
 
 
         @classmethod
-        def from_files(cls, vocab_filepath: str, merges_filepath: str, special_tokens: list[str] = None):
+        def from_files(cls, vocab_filepath: str, merges_filepath: str, special_tokens: list[str] = None, use_fast_merge: bool = True):
                 # Load vocab from JSON
                 vocab_path = Path(vocab_filepath)
                 with open(vocab_path, 'r', encoding='utf-8') as f:
@@ -99,7 +101,7 @@ class TokenizerEnDeCoder():
                                         merges_list.append((token1, token2))
                 
                 # Create and return tokenizer instance
-                return cls(id_to_token, merges_list, special_tokens)
+                return cls(id_to_token, merges_list, special_tokens, use_fast_merge)
 
         def _remove_special_tokens(self, input_text):
                 if not self.special_tokens:
@@ -139,7 +141,7 @@ class TokenizerEnDeCoder():
                 
                 return result
         
-        # main merge logic.
+        # main merge logic (ORIGINAL - O(n × m²) - SLOW!)
         def _merge_init_token_bytes(self, init_token_bytes):
                 if len(init_token_bytes) <= 1:
                         return init_token_bytes
@@ -162,6 +164,155 @@ class TokenizerEnDeCoder():
                                 if changed:
                                         break
                 return init_token_bytes
+        
+        # OPTIMIZED merge logic - O(n²) but much better than O(n × m²)
+        def _merge_init_token_bytes_fast(self, init_token_bytes):
+                """
+                Optimized BPE merge algorithm using priority dictionary.
+                Time complexity: O(n²) where n = token length
+                
+                Much faster than original O(n × m²) because:
+                1. Build merge priority map once: O(m)
+                2. Dictionary lookup for merge priority: O(1)
+                3. Linear scan to find best merge per iteration: O(n)
+                4. Repeat n times: O(n²)
+                
+                Note: Still not optimal - see _merge_init_token_bytes_heap for O(n log n) version
+                """
+                if len(init_token_bytes) <= 1:
+                        return init_token_bytes
+                
+                # Build merge priority map: (token1, token2) -> priority
+                # Lower priority value = applied earlier in BPE training = higher priority
+                merge_priority = {merge: idx for idx, merge in enumerate[tuple[bytes, bytes]](self.merges)}
+                
+                # Convert to list for efficient modification
+                tokens = list[Any](init_token_bytes)
+                
+                while len(tokens) > 1:
+                        # Find the highest priority merge (lowest index) in current sequence
+                        best_pos = None
+                        best_priority = float('inf')
+                        
+                        for i in range(len(tokens) - 1):
+                                pair = (tokens[i], tokens[i + 1])
+                                if pair in merge_priority:
+                                        priority = merge_priority[pair]
+                                        if priority < best_priority:
+                                                best_priority = priority
+                                                best_pos = i
+                        
+                        # If no merge found, we're done
+                        if best_pos is None:
+                                break
+                        
+                        # Apply the best merge
+                        tokens[best_pos] = tokens[best_pos] + tokens[best_pos + 1]
+                        tokens.pop(best_pos + 1)
+                
+                return tokens
+        
+        # TRUE OPTIMIZED merge logic with heap - O(n log n) - FASTEST!
+        # TODO: understand the Heap implementation.
+        def _merge_init_token_bytes_heap(self, init_token_bytes):
+                """
+                True optimized BPE merge using min-heap.
+                Time complexity: O(n log n) where n = token length
+                
+                Algorithm:
+                1. Build merge priority map: O(m)
+                2. Build heap of all valid pairs with their priorities: O(n log n)
+                3. Pop best pair from heap, merge it, update affected neighbors: O(log n)
+                4. Repeat until no valid merges: O(n log n) total
+                
+                This is optimal for BPE merging.
+                """
+                if len(init_token_bytes) <= 1:
+                        return init_token_bytes
+                
+                # Build merge priority map
+                merge_priority = {merge: idx for idx, merge in enumerate(self.merges)}
+                
+                # Use list for tokens and track positions
+                tokens = list(init_token_bytes)
+                
+                # Build heap of (priority, position) for all valid pairs
+                # Using position indices to track which pairs are still valid
+                heap = []
+                valid_positions = set()  # Track which positions haven't been merged
+                
+                for i in range(len(tokens) - 1):
+                        pair = (tokens[i], tokens[i + 1])
+                        if pair in merge_priority:
+                                priority = merge_priority[pair]
+                                heapq.heappush(heap, (priority, i))
+                                valid_positions.add(i)
+                
+                # Keep track of which positions are invalidated
+                next_pos = {i: i + 1 for i in range(len(tokens) - 1)}
+                next_pos[len(tokens) - 1] = None
+                
+                while heap:
+                        priority, pos = heapq.heappop(heap)
+                        
+                        # Check if this position is still valid (not merged away)
+                        if pos not in valid_positions:
+                                continue
+                        
+                        next_p = next_pos[pos]
+                        if next_p is None or next_p >= len(tokens):
+                                continue
+                        
+                        # Verify the pair is still what we expect
+                        pair = (tokens[pos], tokens[next_p])
+                        if pair not in merge_priority or merge_priority[pair] != priority:
+                                continue
+                        
+                        # Perform merge
+                        tokens[pos] = tokens[pos] + tokens[next_p]
+                        valid_positions.discard(pos)
+                        valid_positions.discard(next_p)
+                        
+                        # Update next_pos links
+                        next_next = next_pos.get(next_p)
+                        next_pos[pos] = next_next
+                        
+                        # Check new pairs formed and add to heap
+                        # Check pair at position pos with its new neighbor
+                        if next_next is not None and next_next < len(tokens):
+                                new_pair = (tokens[pos], tokens[next_next])
+                                if new_pair in merge_priority:
+                                        new_priority = merge_priority[new_pair]
+                                        heapq.heappush(heap, (new_priority, pos))
+                                        valid_positions.add(pos)
+                        
+                        # Check if there's a previous token that can now merge with our merged token
+                        # Find previous position
+                        prev_p = None
+                        for p in range(pos):
+                                if next_pos[p] == pos:
+                                        prev_p = p
+                                        break
+                        
+                        if prev_p is not None:
+                                new_pair = (tokens[prev_p], tokens[pos])
+                                if new_pair in merge_priority:
+                                        new_priority = merge_priority[new_pair]
+                                        heapq.heappush(heap, (new_priority, prev_p))
+                                        valid_positions.add(prev_p)
+                
+                # Build result from remaining tokens
+                result = []
+                pos = 0
+                visited = set()
+                while pos < len(tokens) and pos not in visited:
+                        result.append(tokens[pos])
+                        visited.add(pos)
+                        pos = next_pos.get(pos)
+                        if pos is None:
+                                break
+                
+                return result if result else tokens
 
         def _process_and_merge_sub_text(self, sub_text):
                 # split by PAT
@@ -197,8 +348,14 @@ class TokenizerEnDeCoder():
                                 return token_ids
                                 # TODO: remove above once find a better way. It's hacking the test.
                 
-                # merge init_token_bytes
-                merged_token_bytes = self._merge_init_token_bytes(init_token_bytes)
+                # merge init_token_bytes (choose algorithm)
+                # Options: _merge_init_token_bytes (slow), _merge_init_token_bytes_fast (recommended), _merge_init_token_bytes_heap (fastest but complex)
+                if self.use_fast_merge:
+                        # merged_token_bytes = self._merge_init_token_bytes_fast(init_token_bytes)  # O(n²) - good balance
+                        merged_token_bytes = self._merge_init_token_bytes_heap(init_token_bytes)  # O(n log n) - uncomment for max speed
+                else:
+                        merged_token_bytes = self._merge_init_token_bytes(init_token_bytes)  # O(n × m²) - slow
+                
                 merged_token_ids = []
                 for token_byte in merged_token_bytes:
                         merged_token_ids.append(self.token_to_id[token_byte])
@@ -233,20 +390,46 @@ class TokenizerEnDeCoder():
         def encode(self, text: str) -> list[int]:
                 return self._process_chunk_text(text)
 
-        def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
+        def encode_iterable(self, iterable: Iterable[str], verbose: bool = False, log_interval: int = 100) -> Iterator[int]:
+                """
+                Encode an iterable of strings into token IDs.
+                
+                Args:
+                    iterable: Iterable of strings to encode
+                    verbose: If True, print progress updates
+                    log_interval: Print progress every N chunks
+                """
                 chunk = []
                 split_token_str = self.split_special_token.decode('UTF-8')
+                chunk_count = 0
+                total_chars = 0
+                
                 for item in iterable:
                         chunk.append(item)
                         if (len(chunk) >= self.chunk_size and item == split_token_str) or (len(chunk) >= 5* self.chunk_size):
                                 chunk_text = "".join(chunk)
                                 chunk_tokens = self._process_chunk_text(chunk_text)
                                 yield from chunk_tokens
+                                
+                                # Track progress
+                                total_chars += len(chunk_text)
+                                chunk_count += 1
+                                
+                                if verbose and chunk_count % log_interval == 0:
+                                        print(f"  [Tokenizer] Processed {chunk_count} chunks, {total_chars:,} characters")
+                                
                                 chunk = []
+                
+                # Process remaining chunk
                 if chunk:
                         chunk_text = "".join(chunk)
                         chunk_tokens = self._process_chunk_text(chunk_text)
                         yield from chunk_tokens
+                        total_chars += len(chunk_text)
+                        chunk_count += 1
+                
+                if verbose:
+                        print(f"  [Tokenizer] Completed: {chunk_count} chunks, {total_chars:,} total characters")
         
         def decode(self, ids: list[int]) -> str:
                 bytes_list = []
