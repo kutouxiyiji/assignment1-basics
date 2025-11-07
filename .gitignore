@@ -161,3 +161,19 @@ cython_debug/
 
 .ruff_cache/
 *.zip
+
+# Large data files - don't commit to GitHub
+data/*.txt
+data/preprocess/*.bin
+data/preprocess/**/*.bin
+
+# Tokenizer outputs (binary files)
+tokenizer_output/**/*.pkl
+tokenizer_test_output/
+
+# Test files
+test_save/
+
+# Checkpoints (can be large)
+checkpoints/*.ckpt
+plots/*.png
