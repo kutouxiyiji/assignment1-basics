@@ -8,6 +8,7 @@ dependencies = [
     "einops>=0.8.1", # tensor operations
     "einx>=0.3.0", # more general tensor operations
     "jaxtyping>=0.3.0", # type hints for pytorch/jax/numpy
+    "matplotlib>=3.7.0", # plotting
     "numpy",
     "psutil>=6.1.1",
     "pytest>=8.3.4",
@@ -44,9 +45,13 @@ line-length = 120
 [tool.ruff.lint.extend-per-file-ignores]
 # Also ignore `E402` in all `__init__.py` files.
 "__init__.py" = ["E402", "F401", "F403", "E501"]
+# Ignore all errors in adapters.py due to jaxtyping syntax
+"tests/adapters.py" = ["ALL"]
 
 [tool.ruff.lint]
 extend-select = ["UP"]
 ignore = [
-    "F722"
+    "F722",
+    "F821",  # Undefined name
+    "E999",  # Syntax error
 ]
