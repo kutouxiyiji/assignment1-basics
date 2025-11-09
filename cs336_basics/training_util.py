@@ -11,7 +11,7 @@ import transformer_utils
 import tokenizer_endecoder
 import argparse
 import json
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt  # pyright: ignore[reportMissingImports]
 
 # Data Loader
 def data_loading(dataset: np.ndarray, batch_size: int, context_length: int, device: str = 'cpu') -> tuple[torch.Tensor, torch.Tensor]:
@@ -126,8 +126,8 @@ def parse_training_args():
     parser.add_argument('--no-preprocess-data', dest='preprocess_data', action='store_false', help='Skip preprocessing, use existing memmap files')
     parser.set_defaults(preprocess_data=False)  # Default: skip preprocessing
     # Data parameters
-    parser.add_argument('--batch_size', type=int, default=128, help='Batch size for training')
-    parser.add_argument('--context_length', type=int, default=256, help='Context length for sequences')
+    parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
+    parser.add_argument('--context_length', type=int, default=512, help='Context length for sequences')
     
     # Tokenizer parameters 
     # './tokenizer_output/tinystory_train_10000vocab/vocab.json', './tokenizer_output/tinystory_train_10000vocab/merges.txt', ['<|endoftext|>']
@@ -162,8 +162,8 @@ def parse_training_args():
     parser.add_argument('--max_iters', type=int, default=10000, help='Maximum training iterations')
     parser.add_argument('--eval_interval', type=int, default=100, help='Evaluation interval')
     parser.add_argument('--checkpoint_interval', type=int, default=500, help='Checkpoint save interval')
-    parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints', help='Directory to save checkpoints')
-    parser.add_argument('--plot_dir', type=str, default='./plots', help='Directory to save loss plots')
+    parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints/iter10000', help='Directory to save checkpoints')
+    parser.add_argument('--plot_dir', type=str, default='./plots/iter10000', help='Directory to save loss plots')
     parser.add_argument('--num_val_batches', type=int, default=10, help='Number of validation batches to average for validation loss')
     
     # Data paths
@@ -347,6 +347,12 @@ def pre_process(config:dict, save_in_chunk:bool = True):
     print('You can now run training with --no-preprocess-data to skip this step.\n')
 
 
+def clear_gpu_cache():
+    """Clear GPU cache to free up memory."""
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+
 def main_training(config: dict):
     """
     Ability to configure and control the various model and optimizer hyperparameters (in CLI).
@@ -354,6 +360,11 @@ def main_training(config: dict):
     • Serializing checkpoints to a user-provided path.
     • Periodically logging training and validation performance (e.g., to console and/or an external
     service like Weights and Biases)
+    
+    Memory Tips for 8GB GPU:
+    - Recommended batch_size: 8-32 (depending on context_length)
+    - Recommended context_length: 256-512
+    - batch_size * context_length^2 should stay under ~2M for safety
     """
     # CLI and load hyper parameters
     #   - data: batch_size, context_len
@@ -372,6 +383,9 @@ def main_training(config: dict):
     
     # Load np.memmap from files as train and val tokens.
     print(f"started the main training step...\n")
+    
+    # Clear GPU cache before starting
+    clear_gpu_cache()
     
     # Ensure checkpoint and plot directories exist
     os.makedirs(config['checkpoint_dir'], exist_ok=True)
@@ -403,6 +417,18 @@ def main_training(config: dict):
     if torch.cuda.is_available() and config['device'] == 'cuda':
         print(f"GPU: {torch.cuda.get_device_name(0)}")
         print(f"Initial GPU memory allocated: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
+        
+        # Estimate memory usage
+        batch_size = config['batch_size']
+        context_len = config['context_length']
+        # Rough estimate: attention scores for one layer (batch_size * seq_len * seq_len * 4 bytes)
+        attention_mem_gb = (batch_size * context_len * context_len * 4) / (1024**3)
+        print(f"\n⚠️  Memory Estimate (rough):")
+        print(f"   Attention memory per layer: ~{attention_mem_gb:.2f} GB")
+        print(f"   Total with {config['num_layers']} layers + gradients: ~{attention_mem_gb * config['num_layers'] * 3:.2f} GB")
+        if attention_mem_gb * config['num_layers'] * 3 > 6:
+            print(f"   ⚠️  WARNING: This may cause OOM! Consider reducing batch_size or context_length")
+        print()
     opt = transformer_utils.myAdamW(
         model.parameters(),
         config['learning_rate'],
@@ -492,6 +518,8 @@ def main_training(config: dict):
 
 #######################################################
 # Test command: uv run python cs336_basics/training_util.py --config test_config.json
+# First run (tokenizer once): uv run python cs336_basics/training_util.py --preprocess-data
+# Later run: uv run python cs336_basics/training_util.py
 #######################################################
 if __name__ == '__main__':
     config = parse_training_args()
