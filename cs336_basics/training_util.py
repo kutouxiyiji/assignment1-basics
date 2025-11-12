@@ -1,3 +1,4 @@
+from importlib.metadata import requires
 from typing import Any
 import torch
 import numpy as np
@@ -116,6 +117,13 @@ def plot_losses(train_losses: list, val_losses: list, iterations: list, save_pat
 def parse_training_args():
     """Parse command-line arguments for training configuration."""
     parser = argparse.ArgumentParser(description='Train a transformer language model')
+
+    # Option 0: decode/serving or train.
+    parser.add_argument('--inference', dest='inference_mode', action='store_true', help='Inference mode')
+    parser.add_argument('--training', dest='inference_mode', action='store_false', help='Training mode')
+    parser.set_defaults(inference_mode=True)  # Default: skip training
+    parser.add_argument('--checkpoint_filepath_to_load', type=str, default='./checkpoints/iter10000/checkpoint_final.ckpt', help='Filepath to load the checkpoint')
+    parser.add_argument('--prompt', type=str, default = "", help = 'The prompt')
     
     # Option 1: Load all params from a config file
     parser.add_argument('--config', type=str, default = '', help='Path to JSON config file with all parameters')
@@ -516,6 +524,35 @@ def main_training(config: dict):
     
     print("Training Complete.")
 
+
+
+# Decoding
+def decoding(model: torch.nn.Module, tokenizer: tokenizer_endecoder.TokenizerEnDeCoder, prompt: str = "", temp: float = 1.0, top_p: float = None, end_token = b'<|endoftext|>', max_num_tokens: int|float = float("inf"), device: torch.DeviceObjType = 'cuda:0'):
+    pass
+    # Steps
+    # 1. prompt to tokens
+    # 2. tokens to next token logits
+    # 3. logits sampling, with temp and top_p.
+    # 4. continue, until the end of text token or reaches the max tokens.
+    prompt_token_ids:list[int] = tokenizer.encode(prompt)
+    prompt_tokens_len = len(prompt_token_ids)
+    tokens = torch.tensor(prompt_token_ids, device = device)
+    next_token = None
+    num_tokens = prompt_tokens_len
+    end_token_id = tokenizer.token_to_id[end_token]
+    while next_token != end_token_id and num_tokens < max_num_tokens:
+        logits = model.forward(tokens)
+        last_logit = logits[..., -1, :] # (..., 1, vocab) shape
+        softmax_probs = transformer_utils.mySoftMax(last_logit, i = -1, temp = temp)
+        if top_p is not None:
+            pass 
+        else:
+            next_token = torch.multinomial(softmax_probs, num_samples = 1)
+        tokens = torch.cat([tokens, torch.tensor([next_token], device=device)])
+        num_tokens += 1
+    return tokenizer.decode(tokens.tolist()[prompt_tokens_len:])
+
+
 #######################################################
 # Test command: uv run python cs336_basics/training_util.py --config test_config.json
 # First run (tokenizer once): uv run python cs336_basics/training_util.py --preprocess-data
@@ -523,5 +560,38 @@ def main_training(config: dict):
 #######################################################
 if __name__ == '__main__':
     config = parse_training_args()
-    pre_process(config, save_in_chunk=True)
-    main_training(config)
+    if not config['inference_mode']:
+        # train
+        pre_process(config, save_in_chunk=True)
+        main_training(config)
+    else:
+        # inference
+        model = transformer_utils.MyTransfomerLM(
+            vocab_size=config['vocab_size'],
+            context_length=config['context_length'],
+            num_layers=config['num_layers'],
+            d_model=config['d_model'],
+            num_heads=config['num_heads'],
+            d_ff=config['d_ff'],
+            theta=config.get('theta', 10000.0)
+        ).to(config['device'])
+        opt = transformer_utils.myAdamW(
+            model.parameters(),
+            config['learning_rate'],
+            config['betas'],
+            config['eps'],
+            config['weight_decay']
+        )
+        iter = load_checkpoint(config['checkpoint_filepath_to_load'], model, opt)
+        print('✓ Loaded model from files\n')
+        tokenizer = tokenizer_endecoder.TokenizerEnDeCoder.from_files(
+            config['vocab_filepath'], 
+            config['merges_filepath'], 
+            config['special_token_list'],
+            use_fast_merge=True  # Use optimized O(n log m) algorithm - MUCH faster!
+        )
+        print('✓ Created tokenizer from files (using fast merge algorithm)\n')
+        prompt = config['prompt']
+        print(f'    [user]->{prompt}')
+        response = decoding(model, tokenizer, prompt, max_num_tokens=config['context_length'], device=config['device'])
+        print(f'    [response]->{response}')
